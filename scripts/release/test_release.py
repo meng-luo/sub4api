@@ -23,11 +23,13 @@ class ReleaseTest(unittest.TestCase):
         (self.root / 'changelog/0.2.7/CHANGELOG.md').write_text('# v0.2.7\n\n## 新增功能\n\n- 实际更新\n')
         (self.root / 'LICENSE').write_text('fixture')
         (self.root / 'README.md').write_text('fixture')
-        self.env = {**os.environ, 'DOCKERHUB_USERNAME': 'Example', 'DOCKERHUB_TOKEN': 'test-only',
-                    'GITHUB_REPOSITORY': 'MACOS-DO/sub4api', 'GITHUB_OUTPUT': str(self.root / 'output'),
+        self.env = {**os.environ,
+                    'GITHUB_REPOSITORY': 'meng-luo/sub4api', 'GITHUB_OUTPUT': str(self.root / 'output'),
                     'VERSION': '0.2.7', 'COMMIT': 'abc123', 'BUILD_DATE': '2026-09-19T00:00:00Z',
-                    'GHCR_IMAGE': 'ghcr.io/macos-do/sub4api', 'DOCKERHUB_IMAGE': 'example/sub4api',
+                    'GHCR_IMAGE': 'ghcr.io/meng-luo/sub4api',
                     'IMAGE_DIGEST': 'sha256:test'}
+        for key in ('DOCKERHUB_USERNAME', 'DOCKERHUB_TOKEN', 'DOCKERHUB_IMAGE'):
+            self.env.pop(key, None)
         self.git('init', '-q')
         self.git('add', '.')
         self.git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'fixture')
@@ -44,8 +46,8 @@ class ReleaseTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         output = (self.root / 'output').read_text()
         self.assertIn('version=0.2.7\n', output)
-        self.assertIn('ghcr=ghcr.io/macos-do/sub4api', output)
-        self.assertIn('dockerhub=example/sub4api', output)
+        self.assertIn('ghcr=ghcr.io/meng-luo/sub4api', output)
+        self.assertNotIn('dockerhub=', output)
 
     def test_exact_tag_wins(self):
         self.git('tag', 'v0.2.8')
@@ -55,22 +57,21 @@ class ReleaseTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('version=0.2.8', (self.root / 'output').read_text())
 
-    def test_missing_notes_empty_body_and_credentials_stop_early(self):
+    def test_missing_notes_and_empty_body_stop_early(self):
         notes = self.root / 'changelog/0.2.7/CHANGELOG.md'
         for text in ['', '# v0.2.7\n', '# v0.2.7\n\n## 新增功能\n']:
             notes.write_text(text)
             self.assertNotEqual(self.prepare().returncode, 0)
         notes.unlink()
         self.assertNotEqual(self.prepare().returncode, 0)
-        self.env['DOCKERHUB_TOKEN'] = ''
-        self.assertIn('Configure DOCKERHUB_TOKEN', self.prepare().stderr)
 
     def test_notes_render(self):
         subprocess.run(['python3', str(ROOT / 'scripts/release/notes.py')], cwd=self.root, env=self.env, check=True)
         text = (self.root / 'dist/release-notes.md').read_text()
-        for expected in ['实际更新', '## 📥 Installation', '## 📚 Documentation', 'MACOS-DO/sub4api', 'abc123', 'sha256:test']:
+        for expected in ['实际更新', '## 📥 Installation', '## 📚 Documentation', 'meng-luo/sub4api', 'abc123', 'sha256:test']:
             self.assertIn(expected, text)
         self.assertNotIn('Wei-Shaw', text)
+        self.assertNotIn('Docker Hub', text)
 
     def test_all_archives_contain_new_and_legacy_binary_and_checksums(self):
         # Stub only the compiler; exercise real archive and checksum commands.

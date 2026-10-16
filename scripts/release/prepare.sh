@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
-: "${DOCKERHUB_USERNAME:?Configure DOCKERHUB_USERNAME}"
-: "${DOCKERHUB_TOKEN:?Configure DOCKERHUB_TOKEN}"
 version=$(sh backend/scripts/resolve-version.sh)
 if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
   echo 'Version must be a Docker-compatible semantic version (without build metadata).' >&2
@@ -23,8 +21,7 @@ PYNOTES
 {
   echo "version=$version"
   echo "tag=v$version"
-  echo "ghcr=ghcr.io/${GITHUB_REPOSITORY,,}"
-  echo "dockerhub=${DOCKERHUB_USERNAME,,}/sub4api"
+  echo "ghcr=ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
   echo "date=$(git show -s --format=%cI HEAD)"
   echo "commit=$(git rev-parse HEAD)"
 } >> "$GITHUB_OUTPUT"

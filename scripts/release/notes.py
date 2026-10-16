@@ -6,7 +6,6 @@ from pathlib import Path
 version = os.environ['VERSION']
 repo = os.environ['GITHUB_REPOSITORY']
 ghcr = os.environ['GHCR_IMAGE']
-hub = os.environ['DOCKERHUB_IMAGE']
 notes = Path(f'changelog/{version}/CHANGELOG.md').read_text().strip()
 if notes.startswith('# '):
     notes = notes.split('\n', 1)[1].strip()
@@ -22,9 +21,6 @@ body = f'''> Sub4API - AI API Gateway Platform · 将 AI 订阅配额分发和�
 
 **Docker (amd64 / arm64):**
 ```bash
-# Docker Hub
-docker pull {hub}:{version}
-
 # GitHub Container Registry
 docker pull {ghcr}:{version}
 ```
@@ -48,7 +44,6 @@ curl -fsSL https://raw.githubusercontent.com/{repo}/main/deploy/install.sh | sud
 
 - Commit: `{os.environ['COMMIT']}`
 - GHCR: `{ghcr}@{os.environ['IMAGE_DIGEST']}`
-- Docker Hub: `{hub}@{os.environ['IMAGE_DIGEST']}`
 
 </details>
 '''

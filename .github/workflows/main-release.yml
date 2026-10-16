@@ -13,11 +13,10 @@ permissions:
   contents: write
   packages: write
 
-# Shared by main, tag and manual releases. Queue, rather than interrupt a push.
+# Shared by main, tag and manual releases. Do not interrupt an active push.
 concurrency:
   group: sub4api-publish
   cancel-in-progress: false
-  queue: max
 
 jobs:
   release:
@@ -45,9 +44,6 @@ jobs:
       - name: Resolve version and validate configuration
         if: steps.current.outputs.publish == 'true'
         id: meta
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: bash scripts/release/prepare.sh
 
       - name: Check release mutability
@@ -107,12 +103,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/login-action@v3
-        if: steps.current.outputs.publish == 'true'
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Build and push both registries
+      - name: Build and push to GHCR
         if: steps.current.outputs.publish == 'true'
         id: image
         uses: docker/build-push-action@v6
@@ -124,8 +115,6 @@ jobs:
           tags: |
             ${{ steps.meta.outputs.ghcr }}:${{ steps.meta.outputs.version }}
             ${{ steps.meta.outputs.ghcr }}:latest
-            ${{ steps.meta.outputs.dockerhub }}:${{ steps.meta.outputs.version }}
-            ${{ steps.meta.outputs.dockerhub }}:latest
           build-args: |
             VERSION=${{ steps.meta.outputs.version }}
             COMMIT=${{ steps.meta.outputs.commit }}
@@ -143,7 +132,6 @@ jobs:
           VERSION: ${{ steps.meta.outputs.version }}
           COMMIT: ${{ steps.meta.outputs.commit }}
           GHCR_IMAGE: ${{ steps.meta.outputs.ghcr }}
-          DOCKERHUB_IMAGE: ${{ steps.meta.outputs.dockerhub }}
           IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
         run: python3 scripts/release/notes.py
 
