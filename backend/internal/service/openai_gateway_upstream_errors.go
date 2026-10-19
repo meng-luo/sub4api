@@ -576,17 +576,17 @@ func restoreOpenAIUpstreamJSONTopLevelOrder(original, encoded []byte) []byte {
 
 	var buf bytes.Buffer
 	buf.Grow(len(encoded) + 16)
-	buf.WriteByte('{')
+	_ = buf.WriteByte('{')
 	for i, name := range ordered {
 		if i > 0 {
-			buf.WriteByte(',')
+			_ = buf.WriteByte(',')
 		}
 		item := encodedMembers[name]
-		buf.WriteString(item.keyToken)
-		buf.WriteByte(':')
-		buf.WriteString(item.raw)
+		_, _ = buf.WriteString(item.keyToken)
+		_ = buf.WriteByte(':')
+		_, _ = buf.WriteString(item.raw)
 	}
-	buf.WriteByte('}')
+	_ = buf.WriteByte('}')
 	out := buf.Bytes()
 	if !gjson.ValidBytes(out) {
 		return encoded

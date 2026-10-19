@@ -82,7 +82,8 @@ function filenameFromDisposition(value: unknown, format: UserRequestAuditExportF
   const match = value.match(/filename\*?=(?:UTF-8''|"?)([^";]+)"?/i)
   let candidate = ''
   try { candidate = match?.[1] ? decodeURIComponent(match[1]) : '' } catch { candidate = '' }
-  candidate = candidate.replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').trim()
+  candidate = Array.from(candidate, char => char.charCodeAt(0) < 32 ? '_' : char)
+    .join('').replace(/[\\/:*?"<>|]/g, '_').trim()
   return candidate || fallback
 }
 export const userRequestAuditAPI = {

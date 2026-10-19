@@ -115,7 +115,8 @@ func (w *auditResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return nil, nil, http.ErrNotSupported
 }
 func (w *auditResponseWriter) CloseNotify() <-chan bool {
-	if n, ok := w.ResponseWriter.(http.CloseNotifier); ok {
+	// Preserve the legacy writer capability for middleware that still uses it.
+	if n, ok := w.ResponseWriter.(http.CloseNotifier); ok { //nolint:staticcheck // SA1019: compatibility with Gin's ResponseWriter.
 		return n.CloseNotify()
 	}
 	return make(chan bool)

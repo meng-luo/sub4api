@@ -318,8 +318,11 @@ nextTool:
 			if identity != "namespace\x00functions" {
 				return nil, fmt.Errorf("responses Lite additional_tools conflicts with migrated %s", openAIResponsesLiteToolIdentityForError(rawTool))
 			}
-			oldNamespace := merged[previous].(map[string]any)
-			newNamespace := rawTool.(map[string]any)
+			oldNamespace, oldMapOK := merged[previous].(map[string]any)
+			newNamespace, newMapOK := rawTool.(map[string]any)
+			if !oldMapOK || !newMapOK {
+				return nil, newOpenAIResponsesLiteValidationError("tools", "responses Lite functions namespace must be an object")
+			}
 			oldTools, oldOK := oldNamespace["tools"].([]any)
 			newTools, newOK := newNamespace["tools"].([]any)
 			if !oldOK || !newOK {

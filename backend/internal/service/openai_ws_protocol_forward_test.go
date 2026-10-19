@@ -120,7 +120,6 @@ func TestOpenAIGatewayService_Forward_PreservePreviousResponseIDWhenWSEnabled(t 
 	require.Nil(t, upstream.lastReq, "WS 模式下失败时不应回退 HTTP")
 }
 
-
 func TestOpenAIGatewayService_Forward_HTTPIngressRetriesInvalidEncryptedContentOnce(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	wsFallbackServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -179,7 +178,7 @@ func TestOpenAIGatewayService_Forward_HTTPIngressRetriesInvalidEncryptedContentO
 		},
 		Extra: map[string]any{
 			"responses_websockets_v2_enabled": true,
-			"openai_ws_force_http": true,
+			"openai_ws_force_http":            true,
 		},
 	}
 
@@ -265,7 +264,7 @@ func TestOpenAIGatewayService_Forward_HTTPIngressRetriesWrappedInvalidEncryptedC
 		},
 		Extra: map[string]any{
 			"responses_websockets_v2_enabled": true,
-			"openai_ws_force_http": true,
+			"openai_ws_force_http":            true,
 		},
 	}
 

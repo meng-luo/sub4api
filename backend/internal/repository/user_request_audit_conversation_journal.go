@@ -46,13 +46,13 @@ func (r *FileUserRequestAuditRepository) drainPayloadGC(ctx context.Context) err
 		for result.Next() {
 			var path string
 			if err = result.Scan(&path); err != nil {
-				result.Close()
+				_ = result.Close()
 				return err
 			}
 			paths = append(paths, path)
 		}
 		err = result.Err()
-		result.Close()
+		_ = result.Close()
 		if err != nil {
 			return err
 		}
@@ -87,7 +87,7 @@ func (r *FileUserRequestAuditRepository) Clear(ctx context.Context) (int64, erro
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var count int64
 	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM user_request_audit_request_index").Scan(&count); err != nil {
 		return 0, err
@@ -122,7 +122,7 @@ func (r *FileUserRequestAuditRepository) DeleteExpired(ctx context.Context, befo
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	result, err := tx.QueryContext(ctx, "SELECT id FROM user_request_audit_conversations WHERE expires_at<$1 ORDER BY expires_at,id LIMIT $2", before, batchSize)
 	if err != nil {
 		return 0, err
@@ -131,13 +131,13 @@ func (r *FileUserRequestAuditRepository) DeleteExpired(ctx context.Context, befo
 	for result.Next() {
 		var id int64
 		if err = result.Scan(&id); err != nil {
-			result.Close()
+			_ = result.Close()
 			return 0, err
 		}
 		ids = append(ids, id)
 	}
 	err = result.Err()
-	result.Close()
+	_ = result.Close()
 	if err != nil {
 		return 0, err
 	}

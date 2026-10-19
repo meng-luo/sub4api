@@ -117,37 +117,37 @@ func orderedCodexJSONKeys(object map[string]any, order []string) []string {
 // escapeCodexNonASCII 统一处理（官方 AsciiJsonFormatter 也是两层语义）。
 // 与官方一致：& < > 不转义。
 func writeCodexJSONString(buf *bytes.Buffer, value string) {
-	buf.WriteByte('"')
+	_ = buf.WriteByte('"')
 	start := 0
 	for i := range len(value) {
 		switch b := value[i]; b {
 		case '"', '\\':
-			buf.WriteString(value[start:i])
-			buf.WriteByte('\\')
-			buf.WriteByte(b)
+			_, _ = buf.WriteString(value[start:i])
+			_ = buf.WriteByte('\\')
+			_ = buf.WriteByte(b)
 			start = i + 1
 		case '\n':
-			buf.WriteString(value[start:i])
-			buf.WriteString(`\n`)
+			_, _ = buf.WriteString(value[start:i])
+			_, _ = buf.WriteString(`\n`)
 			start = i + 1
 		case '\r':
-			buf.WriteString(value[start:i])
-			buf.WriteString(`\r`)
+			_, _ = buf.WriteString(value[start:i])
+			_, _ = buf.WriteString(`\r`)
 			start = i + 1
 		case '\t':
-			buf.WriteString(value[start:i])
-			buf.WriteString(`\t`)
+			_, _ = buf.WriteString(value[start:i])
+			_, _ = buf.WriteString(`\t`)
 			start = i + 1
 		default:
 			if b < 0x20 {
-				buf.WriteString(value[start:i])
+				_, _ = buf.WriteString(value[start:i])
 				fmt.Fprintf(buf, `\u%04x`, b)
 				start = i + 1
 			}
 		}
 	}
-	buf.WriteString(value[start:])
-	buf.WriteByte('"')
+	_, _ = buf.WriteString(value[start:])
+	_ = buf.WriteByte('"')
 }
 
 // writeCodexJSONLeaf 用关闭 HTML 转义的编码器输出标量与数组。
@@ -162,20 +162,20 @@ func writeCodexJSONLeaf(buf *bytes.Buffer, value any) error {
 	if len(out) > 0 && out[len(out)-1] == '\n' {
 		out = out[:len(out)-1]
 	}
-	buf.Write(out)
+	_, _ = buf.Write(out)
 	return nil
 }
 
 func writeCodexJSONObject(buf *bytes.Buffer, object map[string]any, kind string) error {
 	shape := codexJSONShapes[kind]
 	keys := orderedCodexJSONKeys(object, shape.order)
-	buf.WriteByte('{')
+	_ = buf.WriteByte('{')
 	for i, key := range keys {
 		if i > 0 {
-			buf.WriteByte(',')
+			_ = buf.WriteByte(',')
 		}
 		writeCodexJSONString(buf, key)
-		buf.WriteByte(':')
+		_ = buf.WriteByte(':')
 		child, ok := object[key].(map[string]any)
 		if !ok {
 			if err := writeCodexJSONLeaf(buf, object[key]); err != nil {
@@ -191,7 +191,7 @@ func writeCodexJSONObject(buf *bytes.Buffer, object map[string]any, kind string)
 			return err
 		}
 	}
-	buf.WriteByte('}')
+	_ = buf.WriteByte('}')
 	return nil
 }
 

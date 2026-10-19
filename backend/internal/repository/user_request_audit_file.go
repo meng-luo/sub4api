@@ -77,7 +77,7 @@ func (r *FileUserRequestAuditRepository) beginWrite(ctx context.Context) (*sql.T
 		}
 	}
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback()
 		return nil, err
 	}
 	return tx, nil
@@ -92,7 +92,7 @@ func auditAtomicJSON(path string, value any) error {
 		return err
 	}
 	name := f.Name()
-	defer os.Remove(name)
+	defer func() { _ = os.Remove(name) }()
 	if err = f.Chmod(0o640); err == nil {
 		err = json.NewEncoder(f).Encode(value)
 	}
@@ -119,7 +119,7 @@ func auditSyncDirectory(path string) error {
 	if err != nil {
 		return err
 	}
-	defer dir.Close()
+	defer func() { _ = dir.Close() }()
 	return dir.Sync()
 }
 
@@ -159,12 +159,12 @@ func (r *FileUserRequestAuditRepository) writePayload(ctx context.Context, tx *s
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		os.Remove(path)
+		_ = os.Remove(path)
 		return "", 0, err
 	}
 	_, err = tx.ExecContext(ctx, "INSERT INTO user_request_audit_payloads(request_id,relative_path,kind,ordinal,byte_size) VALUES($1,$2,$3,$4,$5)", id, relative, kind, ordinal, info.Size())
 	if err != nil {
-		os.Remove(path)
+		_ = os.Remove(path)
 		return "", 0, err
 	}
 	return relative, info.Size(), nil
@@ -192,7 +192,7 @@ func (r *FileUserRequestAuditRepository) Create(ctx context.Context, row *servic
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	paths := make([]string, 0, 2)
 	committed := false
 	defer func() {
@@ -282,7 +282,7 @@ func (r *FileUserRequestAuditRepository) Complete(ctx context.Context, c *servic
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var raw, proofRaw []byte
 	var row service.UserRequestAudit
 	var proof service.UserRequestAuditContinuityProof
@@ -385,17 +385,17 @@ func (r *FileUserRequestAuditRepository) regroupScope(ctx context.Context, tx *s
 		var cid, parent sql.NullInt64
 		var raw, pr []byte
 		if err = result.Scan(&id, &cid, &raw, &pr, &parent); err != nil {
-			result.Close()
+			_ = result.Close()
 			return err
 		}
 		row := new(service.UserRequestAudit)
 		proof := service.UserRequestAuditContinuityProof{}
 		if err = json.Unmarshal(raw, row); err != nil {
-			result.Close()
+			_ = result.Close()
 			return err
 		}
 		if err = json.Unmarshal(pr, &proof); err != nil {
-			result.Close()
+			_ = result.Close()
 			return err
 		}
 		row.ID = id
@@ -411,7 +411,7 @@ func (r *FileUserRequestAuditRepository) regroupScope(ctx context.Context, tx *s
 		}
 	}
 	err = result.Err()
-	result.Close()
+	_ = result.Close()
 	if err != nil {
 		return err
 	}

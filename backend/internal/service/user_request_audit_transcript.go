@@ -313,9 +313,9 @@ func (p *UserRequestAuditContinuityProof) add(m UserRequestAuditMessage) {
 	p.Meaningful = p.Meaningful || m.Role == "assistant" || m.Kind == "tool_result"
 	b, _ := json.Marshal(m)
 	h := sha256.New()
-	h.Write([]byte(p.Digest))
-	h.Write([]byte{0})
-	h.Write(b)
+	_, _ = h.Write([]byte(p.Digest))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write(b)
 	p.Digest = hex.EncodeToString(h.Sum(nil))
 	p.Count++
 }

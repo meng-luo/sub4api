@@ -30,42 +30,7 @@ const (
 	openAICodexTicketStatePrefix     = "gAAAAA"
 	openAICodexTicketDefaultModel    = "gpt-6-astra"
 	openAICodexTicketDefaultSolModel = "gpt-5.6-sol"
-
-	// 票据有效期设置边界：最少 1 分钟，避免产生剧烈的打票循环。
-	openAICodexTicketMinTTLSeconds     = 60
-	openAICodexTicketMaxTTLSeconds     = 86400
-	openAICodexTicketDefaultTTLSeconds = 200
-
-	// 票据过期后最长复用时长：0 表示不限制，默认 600 秒。
-	openAICodexTicketDefaultReuseWindowSeconds = 600
 )
-
-// normalizeOpenAICodexTicketTTLSeconds 归一化票据有效期：非正数回落默认值，
-// 越界夹取到 [60, 86400]。
-func normalizeOpenAICodexTicketTTLSeconds(seconds int) int {
-	if seconds <= 0 {
-		return openAICodexTicketDefaultTTLSeconds
-	}
-	if seconds < openAICodexTicketMinTTLSeconds {
-		return openAICodexTicketMinTTLSeconds
-	}
-	if seconds > openAICodexTicketMaxTTLSeconds {
-		return openAICodexTicketMaxTTLSeconds
-	}
-	return seconds
-}
-
-// normalizeOpenAICodexTicketReuseWindowSeconds 归一化过期后最长复用时长：
-// 负数回退默认值，越界夹取到 [0, 86400]；0 表示不限制。
-func normalizeOpenAICodexTicketReuseWindowSeconds(seconds int) int {
-	if seconds < 0 {
-		return openAICodexTicketDefaultReuseWindowSeconds
-	}
-	if seconds > openAICodexTicketMaxTTLSeconds {
-		return openAICodexTicketMaxTTLSeconds
-	}
-	return seconds
-}
 
 // ErrOpenAICodexTicketUnavailable 表示该号该模型没有符合账号规则的有效门票，
 // 且 fail_closed 禁止裸打业务请求。
@@ -233,10 +198,6 @@ func (t *openAICodexTicket) usable(_ time.Time, _ int, _ bool, _ time.Duration) 
 	return t.structurallyValid(0)
 }
 
-func (t *openAICodexTicket) valid(_ time.Time, _ int) bool {
-	return t.structurallyValid(0)
-}
-
 func (s *OpenAIGatewayService) lookupOpenAICodexTicket(account *Account, model string) *openAICodexTicket {
 	if s == nil || account == nil || account.ID <= 0 {
 		return nil
@@ -301,6 +262,7 @@ func (s *OpenAIGatewayService) storeOpenAICodexTicket(ctx context.Context, accou
 	s.openaiCodexTickets.Store(openAICodexTicketKey(account.ID, model), ticket)
 	return nil
 }
+
 // applyOpenAICodexTicket 在出站请求上补齐 x-codex-turn-state：仅当请求没有回带
 // 该头时注入已捕获的有效门票（客户端自己回合内的回带保持原样，见
 // applyOpenAICodexTicketWithGeneration）。请求路径不现场打票；仅在无票策略
@@ -528,7 +490,7 @@ func (s *OpenAIGatewayService) fireOpenAICodexTicketProbe(ctx context.Context, a
 		}
 		eventType := gjson.Get(payload, "type").String()
 		if eventType == "response.output_text.delta" {
-			deltas.WriteString(gjson.Get(payload, "delta").String())
+			_, _ = deltas.WriteString(gjson.Get(payload, "delta").String())
 		}
 		if eventType == "response.completed" {
 			gjson.Get(payload, "response.output").ForEach(func(_, message gjson.Result) bool {
@@ -575,14 +537,6 @@ func extractOpenAICodexResponseCookies(h http.Header) string {
 		pairs = append(pairs, item.Name+"="+item.Value)
 	}
 	return strings.Join(pairs, "; ")
-}
-
-func jsonString(v string) string {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return `""`
-	}
-	return string(b)
 }
 
 func applyOpenAICodexTicketHarvestIdentity(h http.Header, model string) {

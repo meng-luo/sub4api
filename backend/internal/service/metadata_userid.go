@@ -38,15 +38,15 @@ type jsonUserID struct {
 
 func formatJSONMetadataUserID(deviceID, accountUUID, sessionID string, extraFields map[string]json.RawMessage) string {
 	var out bytes.Buffer
-	out.WriteByte('{')
+	_ = out.WriteByte('{')
 	writeField := func(key string, value []byte, comma *bool) {
 		if *comma {
-			out.WriteByte(',')
+			_ = out.WriteByte(',')
 		}
 		encodedKey, _ := json.Marshal(key)
-		out.Write(encodedKey)
-		out.WriteByte(':')
-		out.Write(value)
+		_, _ = out.Write(encodedKey)
+		_ = out.WriteByte(':')
+		_, _ = out.Write(value)
 		*comma = true
 	}
 
@@ -68,7 +68,7 @@ func formatJSONMetadataUserID(deviceID, accountUUID, sessionID string, extraFiel
 	for _, key := range keys {
 		writeField(key, extraFields[key], &comma)
 	}
-	out.WriteByte('}')
+	_ = out.WriteByte('}')
 	return out.String()
 }
 

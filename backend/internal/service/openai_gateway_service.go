@@ -24,7 +24,6 @@ import (
 	"github.com/cespare/xxhash/v2"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
-	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -527,7 +526,6 @@ type OpenAIGatewayService struct {
 	openaiCodexTicketNextAttempt sync.Map
 	openaiCodexTicketHistory     CodexTicketAttemptRepository
 	openaiCodexTicketLifecycle   CodexTicketLifecycleRepository
-	openaiCodexTicketFlight      singleflight.Group
 	openaiCodexTicketLifecycleMu sync.Mutex
 	openaiCodexTicketCancel      context.CancelFunc
 	openaiCodexTicketDone        chan struct{}

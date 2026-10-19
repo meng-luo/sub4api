@@ -47,13 +47,13 @@ func (r *FileUserRequestAuditRepository) loadConversationWindow(ctx context.Cont
 	for ids.Next() {
 		var requestID int64
 		if err = ids.Scan(&requestID); err != nil {
-			ids.Close()
+			_ = ids.Close()
 			return nil, 0, 0, err
 		}
 		all = append(all, requestID)
 	}
 	err = ids.Err()
-	ids.Close()
+	_ = ids.Close()
 	if err != nil {
 		return nil, 0, 0, err
 	}
@@ -78,12 +78,12 @@ func (r *FileUserRequestAuditRepository) loadConversationWindow(ctx context.Cont
 		var raw []byte
 		var link auditRequestLineage
 		if err = result.Scan(&requestID, &raw, &link.parent, &link.prefix, &link.size, &link.hash); err != nil {
-			result.Close()
+			_ = result.Close()
 			return nil, 0, 0, err
 		}
 		row := new(service.UserRequestAudit)
 		if err = json.Unmarshal(raw, row); err != nil {
-			result.Close()
+			_ = result.Close()
 			return nil, 0, 0, err
 		}
 		row.ID = requestID
@@ -92,7 +92,7 @@ func (r *FileUserRequestAuditRepository) loadConversationWindow(ctx context.Cont
 		ordered = append(ordered, requestID)
 	}
 	err = result.Err()
-	result.Close()
+	_ = result.Close()
 	if err != nil {
 		return nil, 0, 0, err
 	}
@@ -111,18 +111,18 @@ func (r *FileUserRequestAuditRepository) loadConversationWindow(ctx context.Cont
 		var requestID int64
 		var path, kind string
 		if err = result.Scan(&requestID, &path, &kind); err != nil {
-			result.Close()
+			_ = result.Close()
 			return nil, 0, 0, err
 		}
 		text, e := readAuditPayload(ctx, r, path)
 		if e != nil {
-			result.Close()
+			_ = result.Close()
 			return nil, 0, 0, e
 		}
 		row := byID[requestID]
 		if kind == "request" {
 			if gotRequest[requestID] {
-				result.Close()
+				_ = result.Close()
 				return nil, 0, 0, fmt.Errorf("duplicate audit request chunk for %d", requestID)
 			}
 			gotRequest[requestID] = true
@@ -135,7 +135,7 @@ func (r *FileUserRequestAuditRepository) loadConversationWindow(ctx context.Cont
 		}
 	}
 	err = result.Err()
-	result.Close()
+	_ = result.Close()
 	if err != nil {
 		return nil, 0, 0, err
 	}
@@ -248,12 +248,12 @@ func (r *FileUserRequestAuditRepository) loadSingleRequest(ctx context.Context, 
 	for result.Next() {
 		var path string
 		if err = result.Scan(&path); err != nil {
-			result.Close()
+			_ = result.Close()
 			return nil, err
 		}
 		text, e := readAuditPayload(ctx, r, path)
 		if e != nil {
-			result.Close()
+			_ = result.Close()
 			return nil, e
 		}
 		if row.ResponseChatML != "" && !endsWithNewline(row.ResponseChatML) && !startsWithNewline(text) {
@@ -262,7 +262,7 @@ func (r *FileUserRequestAuditRepository) loadSingleRequest(ctx context.Context, 
 		row.ResponseChatML += text
 	}
 	err = result.Err()
-	result.Close()
+	_ = result.Close()
 	if err != nil {
 		return nil, err
 	}

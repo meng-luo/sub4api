@@ -38,13 +38,13 @@ func auditRequestDelta(ctx context.Context, tx *sql.Tx, row *service.UserRequest
 	for result.Next() {
 		var c candidate
 		if err = result.Scan(&c.id, &c.size, &c.hash, &c.proof); err != nil {
-			result.Close()
+			_ = result.Close()
 			return nil, 0, err
 		}
 		candidates = append(candidates, c)
 	}
 	err = result.Err()
-	result.Close()
+	_ = result.Close()
 	if err != nil {
 		return nil, 0, err
 	}
@@ -62,7 +62,7 @@ func auditRequestDelta(ctx context.Context, tx *sql.Tx, row *service.UserRequest
 		if c.size <= 0 || c.size > len(row.RequestChatML) {
 			continue
 		}
-		hasher.Write([]byte(row.RequestChatML[offset:c.size]))
+		_, _ = hasher.Write([]byte(row.RequestChatML[offset:c.size]))
 		c.actual = hex.EncodeToString(hasher.Sum(nil))
 		offset = c.size
 	}

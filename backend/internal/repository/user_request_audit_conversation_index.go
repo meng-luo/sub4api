@@ -76,7 +76,7 @@ func auditPage(f service.UserRequestAuditFilter) (int, int) {
 }
 
 func readAuditMetadataRows(result *sql.Rows) ([]*service.UserRequestAudit, error) {
-	defer result.Close()
+	defer func() { _ = result.Close() }()
 	out := make([]*service.UserRequestAudit, 0)
 	for result.Next() {
 		var raw []byte
@@ -127,7 +127,7 @@ func (r *FileUserRequestAuditRepository) ListModelFacets(ctx context.Context, f 
 	if err != nil {
 		return nil, err
 	}
-	defer result.Close()
+	defer func() { _ = result.Close() }()
 	out := make([]service.UserRequestAuditModelFacet, 0)
 	for result.Next() {
 		var facet service.UserRequestAuditModelFacet
@@ -178,12 +178,12 @@ func (r *FileUserRequestAuditRepository) loadConversation(ctx context.Context, t
 		var raw []byte
 		var link auditRequestLineage
 		if err = result.Scan(&requestID, &raw, &link.parent, &link.prefix, &link.size, &link.hash); err != nil {
-			result.Close()
+			_ = result.Close()
 			return nil, err
 		}
 		row := new(service.UserRequestAudit)
 		if err = json.Unmarshal(raw, row); err != nil {
-			result.Close()
+			_ = result.Close()
 			return nil, err
 		}
 		row.ID = requestID
@@ -191,7 +191,7 @@ func (r *FileUserRequestAuditRepository) loadConversation(ctx context.Context, t
 		lineage[requestID] = link
 	}
 	err = result.Err()
-	result.Close()
+	_ = result.Close()
 	if err != nil {
 		return nil, err
 	}
@@ -214,13 +214,13 @@ func (r *FileUserRequestAuditRepository) loadConversation(ctx context.Context, t
 	for result.Next() {
 		var c chunk
 		if err = result.Scan(&c.id, &c.path, &c.kind); err != nil {
-			result.Close()
+			_ = result.Close()
 			return nil, err
 		}
 		chunks = append(chunks, c)
 	}
 	err = result.Err()
-	result.Close()
+	_ = result.Close()
 	if err != nil {
 		return nil, err
 	}
@@ -287,7 +287,7 @@ func (r *FileUserRequestAuditRepository) GetConversation(ctx context.Context, id
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	ids, err := auditResolveConversationIDs(ctx, tx, []int64{id})
 	if err != nil {
 		return nil, err
@@ -312,7 +312,7 @@ func (r *FileUserRequestAuditRepository) GetConversationWindow(ctx context.Conte
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	ids, err := auditResolveConversationIDs(ctx, tx, []int64{id})
 	if err != nil {
 		return nil, err
@@ -345,7 +345,7 @@ func (r *FileUserRequestAuditRepository) ExportConversations(ctx context.Context
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var summaries []*service.UserRequestAudit
 	where, args := auditSQLConditions(f, false)
 	if len(ids) > 0 {

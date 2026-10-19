@@ -32,7 +32,7 @@ func auditDecodeWire(raw string, id int64) []UserRequestAuditMessage {
 		if replace {
 			slots[i].content.Reset()
 		}
-		slots[i].content.WriteString(text)
+		_, _ = slots[i].content.WriteString(text)
 		if name != "" {
 			m.ToolName = name
 		}
@@ -131,9 +131,7 @@ func auditDecodeWire(raw string, id int64) []UserRequestAuditMessage {
 				}
 				put(key, "tool_call", args, auditString(b, "name"), auditString(b, "id"), true)
 			default:
-				for _, m := range auditDecodeObject(b, "assistant", id) {
-					errors = append(errors, m)
-				}
+				errors = append(errors, auditDecodeObject(b, "assistant", id)...)
 			}
 		case "content_block_delta":
 			d, _ := e["delta"].(map[string]any)

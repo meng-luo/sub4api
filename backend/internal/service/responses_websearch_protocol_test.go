@@ -52,10 +52,10 @@ func TestResponsesSearchServerInjectionAndChoice(t *testing.T) {
 }
 
 func TestResponsesSearchBuiltinTranslation(t *testing.T) {
-	body := []byte(`{"stream":true,"max_tool_calls":2,"tools":[{"type":"function","name":"__sub4api_web_search"},{"type":"function","name":"__sub4api_web_search_1"},{"type":"web_search_preview","search_context_size":"high","external_web_access":true,"filters":{"allowed_domains":["example.com"]}}],"tool_choice":{"type":"allowed_tools","mode":"required","tools":[{"type":"web_search_preview"},{"type":"function","name":"__sub4api_web_search"}]},"include":["web_search_call.action.sources","reasoning.encrypted_content"],"extension":{"integer":9007199254740993}}`)
+	body := []byte(`{"stream":true,"max_tool_calls":2,"tools":[{"type":"function","name":"client_web_search"},{"type":"function","name":"client_web_search_1"},{"type":"web_search_preview","search_context_size":"high","external_web_access":true,"filters":{"allowed_domains":["example.com"]}}],"tool_choice":{"type":"allowed_tools","mode":"required","tools":[{"type":"web_search_preview"},{"type":"function","name":"client_web_search"}]},"include":["web_search_call.action.sources","reasoning.encrypted_content"],"extension":{"integer":9007199254740993}}`)
 	plan, err := prepareResponsesWebSearch(body)
 	require.NoError(t, err)
-	require.Equal(t, "__sub4api_web_search_2", plan.FunctionName)
+	require.Equal(t, "client_web_search_2", plan.FunctionName)
 	require.Equal(t, 2, plan.MaxCalls)
 	require.Equal(t, 10, plan.MaxResults)
 	require.Equal(t, []string{"example.com"}, plan.AllowedDomains)
@@ -65,7 +65,7 @@ func TestResponsesSearchBuiltinTranslation(t *testing.T) {
 	require.NotContains(t, after, "max_tool_calls")
 	require.Equal(t, "true", string(after["stream"]), "streaming clients keep upstream streaming")
 	require.JSONEq(t, `["reasoning.encrypted_content"]`, string(after["include"]))
-	require.JSONEq(t, `{"type":"allowed_tools","mode":"required","tools":[{"type":"function","name":"__sub4api_web_search_2"},{"type":"function","name":"__sub4api_web_search"}]}`, string(after["tool_choice"]))
+	require.JSONEq(t, `{"type":"allowed_tools","mode":"required","tools":[{"type":"function","name":"client_web_search_2"},{"type":"function","name":"client_web_search"}]}`, string(after["tool_choice"]))
 	require.Contains(t, string(plan.Body), "9007199254740993")
 	buffered, err := prepareResponsesWebSearch([]byte(`{"stream":false,"tools":[{"type":"web_search"}]}`))
 	require.NoError(t, err)
@@ -73,7 +73,7 @@ func TestResponsesSearchBuiltinTranslation(t *testing.T) {
 	forced, err := prepareResponsesWebSearch([]byte(`{"tool_choice":{"type":"web_search"},"tools":[{"type":"web_search"}]}`))
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(forced.Body, &after))
-	require.JSONEq(t, `{"type":"function","name":"__sub4api_web_search"}`, string(after["tool_choice"]))
+	require.JSONEq(t, `{"type":"function","name":"client_web_search"}`, string(after["tool_choice"]))
 }
 
 func TestResponsesSearchRejectsUnsupportedConstraints(t *testing.T) {
@@ -169,17 +169,17 @@ func TestResponsesSearchHonorsAllowedToolsExclusionBeforeSearchOptions(t *testin
 }
 
 func TestResponsesSearchAdditionalToolsAndStringNamesAvoidCollisions(t *testing.T) {
-	body := `{"tools":["__sub4api_web_search"],"input":[{"type":"additional_tools","role":"developer","extension":9007199254740993,"tools":[{"type":"function","name":"__sub4api_web_search_1"},{"type":"web_search","filters":{"allowed_domains":["Example.COM"]}}]},{"role":"user","content":"latest"}]}`
+	body := `{"tools":["client_web_search"],"input":[{"type":"additional_tools","role":"developer","extension":9007199254740993,"tools":[{"type":"function","name":"client_web_search_1"},{"type":"web_search","filters":{"allowed_domains":["Example.COM"]}}]},{"role":"user","content":"latest"}]}`
 	plan, err := prepareResponsesWebSearch([]byte(body))
 	require.NoError(t, err)
-	require.Equal(t, "__sub4api_web_search_2", plan.FunctionName)
+	require.Equal(t, "client_web_search_2", plan.FunctionName)
 	require.Equal(t, []string{"example.com"}, plan.AllowedDomains)
 	require.Contains(t, string(plan.Body), "9007199254740993")
 	var parsed map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(plan.Body, &parsed))
 	var input []map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(parsed["input"], &input))
-	require.JSONEq(t, `[{"type":"function","name":"__sub4api_web_search_1"}]`, string(input[0]["tools"]))
+	require.JSONEq(t, `[{"type":"function","name":"client_web_search_1"}]`, string(input[0]["tools"]))
 	require.JSONEq(t, `"latest"`, string(input[1]["content"]))
 	_, err = prepareResponsesWebSearch([]byte(`{"input":[{"type":"additional_tools","tools":[{"type":"web_search","external_web_access":false}]}]}`))
 	require.ErrorContains(t, err, "external_web_access")

@@ -37,8 +37,7 @@ func groupAuditConversationsWithDependencies(rows []*service.UserRequestAudit, p
 	for i := range parents {
 		parents[i] = i
 	}
-	var root func(int) int
-	root = func(i int) int {
+	root := func(i int) int {
 		for parents[i] != i {
 			parents[i] = parents[parents[i]]
 			i = parents[i]
@@ -215,7 +214,7 @@ func auditLabelUsers(ctx context.Context, db auditQueryer, rows []*service.UserR
 	if err != nil {
 		return err
 	}
-	defer users.Close()
+	defer func() { _ = users.Close() }()
 	labels := make(map[int64]string)
 	for users.Next() {
 		var id int64

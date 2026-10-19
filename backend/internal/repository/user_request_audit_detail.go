@@ -22,7 +22,7 @@ func (r *FileUserRequestAuditRepository) GetByID(ctx context.Context, id int64) 
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	ids, err := auditResolveConversationIDs(ctx, tx, []int64{id})
 	if err != nil {
 		return nil, err

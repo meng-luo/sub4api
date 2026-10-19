@@ -89,7 +89,7 @@ func TestOpenAIBPSStructuredValidationBoundaries(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, large.validate(bpsResponse(bpsText(`{"id":9007199254740993}`))))
 	require.Error(t, large.validate(bpsResponse(bpsText(`{"id":9007199254740992}`))))
-	require.IsType(t, json.Number(""), format["schema"].(map[string]any)["properties"].(map[string]any)["id"].(map[string]any)["const"])
+	require.IsType(t, json.Number(""), bpsTestAs[map[string]any](t, bpsTestAs[map[string]any](t, bpsTestAs[map[string]any](t, format["schema"])["properties"])["id"])["const"])
 	// Only references within this schema document are permitted.
 	require.NoError(t, bpsDecode([]byte(`{"type":"json_schema","name":"local","schema":{"type":"object","$defs":{"flag":{"type":"boolean"}},"properties":{"ok":{"$ref":"#/$defs/flag"}},"required":["ok"]}}`), &format))
 	local, err := bpsPrepareStructuredOutput(map[string]any{"format": format})
@@ -125,7 +125,7 @@ func TestOpenAIBPSStructuredToolsRefusalsAndCompaction(t *testing.T) {
 		require.Contains(t, rec.Body.String(), "function_call")
 		require.NotContains(t, rec.Body.String(), "run_officejs")
 		call := map[string]any{"type": "function_call", "id": "fc_structured_tool", "call_id": "structured_tool", "name": "exec", "arguments": `{"command":"pwd"}`}
-		source["input"] = append(source["input"].([]any), call, map[string]any{"type": "function_call_output", "call_id": "structured_tool", "output": "/workspace"})
+		source["input"] = append(bpsTestAs[[]any](t, source["input"]), call, map[string]any{"type": "function_call_output", "call_id": "structured_tool", "output": "/workspace"})
 		s.httpUpstream = &bpsHTTPStub{body: bpsJSON(bpsResponse(bpsText(`{"ok":true}`))), contentType: "application/json"}
 		next, nextRec := bpsContext(1, "/responses")
 		_, err = s.Forward(next.Request.Context(), next, a, []byte(bpsJSON(source)))
@@ -150,7 +150,7 @@ func TestOpenAIBPSStructuredToolsRefusalsAndCompaction(t *testing.T) {
 	require.Nil(t, r.Structured)
 	response, err := s.bpsTransformResponse(c.Request.Context(), a, r, bpsResponse(bpsText("A plain summary.")))
 	require.NoError(t, err)
-	require.Equal(t, "compaction", response["output"].([]any)[0].(map[string]any)["type"])
+	require.Equal(t, "compaction", bpsTestAs[map[string]any](t, bpsTestAs[[]any](t, response["output"])[0])["type"])
 }
 
 func TestOpenAIBPSStructuredInterruptedStreamNeverLeaksText(t *testing.T) {

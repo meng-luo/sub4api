@@ -369,7 +369,7 @@ func (h *UserRequestAuditHandler) DownloadExport(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil {
 		response.ErrorFrom(c, err)

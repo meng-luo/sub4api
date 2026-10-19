@@ -121,8 +121,7 @@ func rewriteOpenAIRequestEnvironmentAt(text, timezone, currentDate string, fillM
 			text = text[:base+valueStart] + timezone + text[base+valueEnd:]
 			trimmed = strings.TrimSpace(text)
 			root = openAIEnvironmentFieldStart.FindStringSubmatchIndex(trimmed)
-			rootCloseStart, rootCloseEnd = findOpenAIEnvironmentFieldEnd(trimmed[root[1]:], "environment_context")
-			content = trimmed[root[1] : root[1]+rootCloseStart]
+			rootCloseStart, _ = findOpenAIEnvironmentFieldEnd(trimmed[root[1]:], "environment_context")
 		}
 		if valueStart < 0 || !hasCurrentDate {
 			insert := ""

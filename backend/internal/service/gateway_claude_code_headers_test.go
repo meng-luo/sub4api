@@ -105,9 +105,11 @@ func TestClaudeCodeControlHeaders_ResponseToNextRequest(t *testing.T) {
 				_ = resp.Body.Close()
 				next := buildClaudeControlTestRequest(t, s, endpoint, account, http.Header{}, true)
 				got := filterClaudeCodeControlHeaders(next.Header)
-				require.Equal(t, []string{"replacement"}, got["anthropic-usage-limit"])
-				require.Equal(t, []string{""}, got["x-cc-compaction-request"])
-				require.Equal(t, []string{"initial-x-claude-code-compaction", "second"}, got["x-claude-code-compaction"])
+				// The control-header cache deliberately uses lowercase wire names.
+				rawHeaders := map[string][]string(got)
+				require.Equal(t, []string{"replacement"}, rawHeaders["anthropic-usage-limit"])
+				require.Equal(t, []string{""}, rawHeaders["x-cc-compaction-request"])
+				require.Equal(t, []string{"initial-x-claude-code-compaction", "second"}, rawHeaders["x-claude-code-compaction"])
 				require.Equal(t, cache.headers[account.ID], got)
 
 				caller := http.Header{}
@@ -184,8 +186,10 @@ func TestClaudeCodeControlHeaders_MissingFieldsAndCacheFailure(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "https://upstream.test", nil)
 	resp, err := s.doClaudeUpstreamRequest(context.Background(), req, "", account, nil)
 	require.NoError(t, err)
+	require.Same(t, upstream.resp, resp)
+	require.NoError(t, resp.Body.Close())
 	require.Zero(t, cache.updates)
-	require.Equal(t, []string{"retained"}, cache.headers[1]["anthropic-usage-limit"])
+	require.Equal(t, []string{"retained"}, map[string][]string(cache.headers[1])["anthropic-usage-limit"])
 	cache.writeErr = errors.New("cache unavailable")
 	upstream.resp.Header.Set("Anthropic-Usage-Limit", "ignored-on-cache-error")
 	resp, err = s.doClaudeUpstreamRequest(context.Background(), req, "", account, nil)
