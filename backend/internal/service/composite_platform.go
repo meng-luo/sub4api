@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/MACOS-DO/sub4api/internal/domain"
 	"github.com/MACOS-DO/sub4api/internal/pkg/ctxkey"
 )
 
@@ -204,11 +205,5 @@ func (s *GatewayService) resolveCompositeRouteDecision(ctx context.Context, grou
 }
 
 func isConcreteRequestPlatform(platform string) bool {
-	switch platform {
-	case PlatformAnthropic, PlatformOpenAI, PlatformGemini, PlatformAntigravity, PlatformGrok,
-		PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo, PlatformOpenAIBPS, PlatformTypeSafe:
-		return true
-	default:
-		return false
-	}
+	return domain.IsConcretePlatform(platform)
 }

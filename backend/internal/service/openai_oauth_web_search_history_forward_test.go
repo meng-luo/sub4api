@@ -1,0 +1,81 @@
+//go:build unit
+
+package service
+
+import (
+	"context"
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
+)
+
+// TestForward_OAuthWebSearchHistoryDeclaresTool drives the Codex compaction
+// shape (web_search_call history, tools:[]) through Forward and asserts the
+// body reaching chatgpt.com declares web_search (#7927): top-level for the
+// standard wire, input additional_tools for Responses Lite.
+func TestForward_OAuthWebSearchHistoryDeclaresTool(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		passthrough bool
+		lite        bool
+	}{
+		{"transform", false, false},
+		{"passthrough", true, false},
+		{"transform lite", false, true},
+		{"passthrough lite", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			s := newAstraOAuthSetup(t, tc.passthrough)
+			if tc.lite {
+				s.c.Request.Header.Set(responsesLiteHeader, "true")
+			}
+			inner := `{"id":"resp_test","model":"gpt-5.5","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+			s.upstream.resp = &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       io.NopCloser(strings.NewReader(codexCompletedSSE(inner))),
+			}
+			body, err := sjson.SetRawBytes([]byte(openAIWebSearchHistoryCompactionBody), "input.-1", []byte(`{"type":"compaction_trigger"}`))
+			require.NoError(t, err)
+
+			result, err := s.svc.Forward(context.Background(), s.c, s.account, body)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.NotNil(t, s.upstream.lastReq)
+			require.Equal(t, astraProCodexResponsesURL, s.upstream.lastReq.URL.String())
+
+			forwarded := s.upstream.lastBody
+			search := gjson.GetBytes(forwarded, `input.#(type=="web_search_call")`)
+			require.Equal(t, "ws_123", search.Get("id").String())
+			require.Equal(t, "completed", search.Get("status").String())
+			require.Equal(t, "kwin inputmethod", search.Get("action.query").String())
+			require.Equal(t, "none", gjson.GetBytes(forwarded, "tool_choice").String())
+			items := gjson.GetBytes(forwarded, "input").Array()
+			require.Equal(t, "compaction_trigger", items[len(items)-1].Get("type").String())
+			if !tc.lite {
+				tools := gjson.GetBytes(forwarded, "tools").Array()
+				require.Len(t, tools, 1)
+				require.Equal(t, "web_search", tools[0].Get("type").String())
+				return
+			}
+			require.False(t, gjsonToolsContainWebSearch(gjson.GetBytes(forwarded, "tools")))
+			var declarations []gjson.Result
+			for _, item := range items[:len(items)-1] {
+				if item.Get("type").String() == "additional_tools" && gjsonToolsContainWebSearch(item.Get("tools")) {
+					declarations = append(declarations, item)
+				}
+			}
+			require.Len(t, declarations, 1)
+			require.Equal(t, "web_search", declarations[0].Get("tools.0.type").String())
+			require.True(t, declarations[0].Get("tools.0.external_web_access").Exists())
+			require.False(t, declarations[0].Get("tools.0.external_web_access").Bool())
+		})
+	}
+}

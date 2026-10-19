@@ -2,6 +2,7 @@
 
 ## 更新内容
 
+- 合并sub2api 0.2.10版本
 - OpenAI OAuth/Codex 账号的 HTTP Responses 客户端可按账号面板既有 WSv2 开关/模式使用 WebSocket 上游，网关仍返回 SSE/JSON，客户端无需更换协议。API Key 自定义中转站的 HTTP 入站保持 HTTP 上游；其他平台不变。账号/全局强制 HTTP 与禁用 WS 仍有效，独立 compact 端点保持 unary HTTP。协议切换不保证模型首输出更快。
 - Codex OAuth/SetupToken 的 Responses WebSocket 握手固定使用官方当前 WSv2 Beta `responses_websockets=2026-02-06`；API Key 兼容路径仍按协商协议保留旧兼容值。账号隔离、turn-state 与连接池安全边界不变。
 - 收敛 Codex WS 握手：保留官方条件头（window、parent-thread、subagent、memgen、timing metrics），将完整 `tool_namespaces_info` 留在帧内 `client_metadata`，不塞入 HTTP Upgrade 头；最终仍剥离 `session_id`、`conversation_id`、`x-codex-installation-id` 和未经配置的 attestation。

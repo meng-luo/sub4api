@@ -1,7 +1,7 @@
 package provider
 
 // Regression tests for the EasyPay forged-callback vulnerability
-// (Wei-Shaw/sub2api issue #7881).
+// (Wei-Shaw/sub2api issue #7875).
 //
 // Attack recap: the order-creation signature (visible to the payer in the
 // submit.php popup URL) signs return_url among other fields, and the sign

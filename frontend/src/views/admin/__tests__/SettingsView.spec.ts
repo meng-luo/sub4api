@@ -2098,6 +2098,8 @@ describe("admin SettingsView platform quota matrix", () => {
     minimax: { daily: 6, weekly: 40, monthly: null },
     opencode_go: { daily: null, weekly: 35, monthly: 0 },
     typesafe: { daily: 3, weekly: 0, monthly: null },
+    command_code: { daily: 7, weekly: null, monthly: 80 },
+    cline: { daily: null, weekly: 45, monthly: 0 },
   };
   const authSources = ["email", "linuxdo", "oidc", "wechat", "github", "google", "dingtalk"] as const;
 
