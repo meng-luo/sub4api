@@ -65,7 +65,9 @@ func TestCodexTicketCookieOnlyIsReusable(t *testing.T) {
 	require.Empty(t, echoed.Get("Cookie"))
 
 	statuses := OpenAICodexTicketStatuses(account, svc.openAICodexTicketConfig(), time.Now())
-	require.Len(t, statuses, 6)
+	models, err := ModelTraceTicketModels()
+	require.NoError(t, err)
+	require.Len(t, statuses, len(models))
 	for _, status := range statuses {
 		if status.Model == "gpt-6-astra" {
 			require.True(t, status.Ready)

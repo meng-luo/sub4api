@@ -248,8 +248,10 @@ func (s *OpenAIGatewayService) runCodexTicketAttemptWithChallengeGenerator(ctx c
 		a.Outcome, a.ReasonCode = "miss", "http_status"
 		return result, nil
 	}
-	prediction, commit, predictErr := ModelTracePredictCommitted(output, challenge.ExpectedCount)
-	a.FingerprintCommit = commit
+	prediction, snapshot, predictErr := modelTracePredictSnapshot(output, challenge.ExpectedCount)
+	if snapshot != nil {
+		a.FingerprintCommit = snapshot.commit
+	}
 	count := prediction.ParsedCount
 	a.ParsedNumberCount = &count
 	if predictErr != nil {
@@ -258,7 +260,7 @@ func (s *OpenAIGatewayService) runCodexTicketAttemptWithChallengeGenerator(ctx c
 	}
 	a.FingerprintPredictedModel = prediction.Model
 	a.FingerprintProbability = &prediction.Probability
-	matched := prediction.Model == model
+	matched := snapshot.bank.fingerprintMatches(model, prediction.Model)
 	a.FingerprintMatched = &matched
 	if !matched {
 		a.Outcome, a.ReasonCode = "miss", "fingerprint_mismatch"
@@ -271,7 +273,7 @@ func (s *OpenAIGatewayService) runCodexTicketAttemptWithChallengeGenerator(ctx c
 	now := time.Now()
 	generation := uuid.NewString()
 	ticket := &openAICodexTicket{AccountID: account.ID, Model: model, State: state, Length: len(state),
-		GenerationID: generation, VerificationMethod: "modeltrace_v1", FingerprintCommit: commit,
+		GenerationID: generation, VerificationMethod: "modeltrace_v1", FingerprintCommit: snapshot.commit,
 		CapturedAt: now, Attempts: 1, HTTPStatus: status, Cookie: cookie}
 	if err := s.storeOpenAICodexTicket(ctx, account, ticket); err != nil {
 		a.Outcome, a.ReasonCode = "error", "persistence"

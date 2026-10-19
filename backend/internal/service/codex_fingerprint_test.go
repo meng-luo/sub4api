@@ -41,3 +41,23 @@ func TestModelTraceBankRejectsInvalidData(t *testing.T) {
 	_, err := parseModelTraceBank([]byte(`{"schema":"robust-number-fingerprint-bank","models":[{"id":"gpt-1"}]}`))
 	require.Error(t, err)
 }
+
+func TestModelTraceSharedFingerprintRequiresAvailableGPTReference(t *testing.T) {
+	for _, models := range [][]modelTraceModel{
+		{{ID: "gpt-6-sol", Family: "gpt"}},
+		{{ID: "gpt-6-astra", Family: "other"}},
+	} {
+		bank := &modelTraceBank{Models: models}
+		require.Empty(t, bank.fingerprintModel("gpt-6.1-sol"))
+		require.False(t, bank.fingerprintMatches("gpt-6.1-sol", "gpt-6-astra"))
+
+		previous := modelTraceActive.Load()
+		func() {
+			defer modelTraceActive.Store(previous)
+			modelTraceActive.Store(&modelTraceVersion{bank: bank, commit: "missing-reference-test"})
+			models, err := ModelTraceTicketModels()
+			require.NoError(t, err)
+			require.NotContains(t, models, "gpt-6.1-sol")
+		}()
+	}
+}

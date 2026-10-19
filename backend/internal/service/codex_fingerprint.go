@@ -125,18 +125,21 @@ func ModelTraceGPTModels() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	bank := snapshot.bank
+	return snapshot.bank.gptModels(), nil
+}
+
+func (bank *modelTraceBank) gptModels() []string {
 	models := make([]string, 0, len(bank.Models))
 	for _, model := range bank.Models {
 		if model.Family == "gpt" {
 			models = append(models, model.ID)
 		}
 	}
-	return models, nil
+	return models
 }
 
 func modelTraceKnownGPTModel(model string) bool {
-	models, err := ModelTraceGPTModels()
+	models, err := ModelTraceDiagnosticModels()
 	if err != nil {
 		return false
 	}
@@ -148,33 +151,53 @@ func modelTraceKnownGPTModel(model string) bool {
 	return false
 }
 
-// modelTraceExtraDiagnosticModels 是允许检测、但指纹库还没有收录分类的模型。
-// 库补上对应类之后，ModelTraceDiagnosticModels 会自动回到精确匹配。
-var modelTraceExtraDiagnosticModels = []string{"gpt-6.1-sol"}
-
-// modelTraceDiagnosticReferenceClass 是库缺类时的同系列参考类，只用于把
-// "命中参考类"降级成 uncertain，绝不会把命中其它类当成正常。
-var modelTraceDiagnosticReferenceClass = map[string]string{
-	"gpt-6.1-sol": "gpt-6-sol",
+var modelTraceSharedFingerprintModels = []struct{ model, reference string }{
+	{"gpt-6.1-sol", "gpt-6-astra"},
 }
 
-// ModelTraceDiagnosticModels 返回降智检测的可选模型：库内 GPT 类加上已上线
-// 但缺少指纹类的模型。打票仍只用库内类——票据要靠指纹验真，缺类会验不过。
+// A model's own class always takes priority over a shared fingerprint.
+func (bank *modelTraceBank) fingerprintModel(model string) string {
+	models := bank.gptModels()
+	for _, known := range models {
+		if known == model {
+			return model
+		}
+	}
+	for _, shared := range modelTraceSharedFingerprintModels {
+		if shared.model != model {
+			continue
+		}
+		for _, known := range models {
+			if known == shared.reference {
+				return shared.reference
+			}
+		}
+	}
+	return ""
+}
+
+func (bank *modelTraceBank) fingerprintMatches(model, predicted string) bool {
+	reference := bank.fingerprintModel(model)
+	return reference != "" && reference == predicted
+}
+
+// ModelTraceDiagnosticModels includes models verified through a shared class.
 func ModelTraceDiagnosticModels() ([]string, error) {
-	models, err := ModelTraceGPTModels()
+	snapshot, err := currentModelTraceBank()
 	if err != nil {
 		return nil, err
 	}
+	models := snapshot.bank.gptModels()
 	known := make(map[string]bool, len(models))
 	for _, model := range models {
 		known[model] = true
 	}
-	for _, extra := range modelTraceExtraDiagnosticModels {
-		if known[extra] {
+	for _, shared := range modelTraceSharedFingerprintModels {
+		if known[shared.model] || snapshot.bank.fingerprintModel(shared.model) == "" {
 			continue
 		}
-		known[extra] = true
-		models = append(models, extra)
+		known[shared.model] = true
+		models = append(models, shared.model)
 	}
 	return models, nil
 }
@@ -197,7 +220,7 @@ func codexTicketEligibleModel(model string) bool {
 }
 
 func ModelTraceTicketModels() ([]string, error) {
-	models, err := ModelTraceGPTModels()
+	models, err := ModelTraceDiagnosticModels()
 	if err != nil {
 		return nil, err
 	}
@@ -376,9 +399,18 @@ func ModelTracePredict(text string, expectedCount int) (ModelTracePrediction, er
 }
 
 func ModelTracePredictCommitted(text string, expectedCount int) (ModelTracePrediction, string, error) {
+	prediction, snapshot, err := modelTracePredictSnapshot(text, expectedCount)
+	if snapshot == nil {
+		return prediction, "", err
+	}
+	return prediction, snapshot.commit, err
+}
+
+// Keep classification and shared-class matching on the same bank during refresh.
+func modelTracePredictSnapshot(text string, expectedCount int) (ModelTracePrediction, *modelTraceVersion, error) {
 	snapshot, err := currentModelTraceBank()
 	if err != nil {
-		return ModelTracePrediction{}, "", err
+		return ModelTracePrediction{}, nil, err
 	}
 	bank := snapshot.bank
 	numbers := modelTraceParseNumbers(text)
@@ -387,7 +419,7 @@ func ModelTracePredictCommitted(text string, expectedCount int) (ModelTracePredi
 		minimum = max(minimum, int(math.Ceil(float64(expectedCount)*0.55)))
 	}
 	if len(numbers) < minimum {
-		return ModelTracePrediction{ParsedCount: len(numbers)}, snapshot.commit, errors.New("insufficient_numbers")
+		return ModelTracePrediction{ParsedCount: len(numbers)}, snapshot, errors.New("insufficient_numbers")
 	}
 	scores := modelTraceScores(numbers, bank)
 	beta := bank.Calibration["1"].Beta
@@ -405,7 +437,7 @@ func ModelTracePredictCommitted(text string, expectedCount int) (ModelTracePredi
 			winner = index
 		}
 	}
-	return ModelTracePrediction{Model: bank.Models[winner].ID, Probability: weights[winner] / total, ParsedCount: len(numbers)}, snapshot.commit, nil
+	return ModelTracePrediction{Model: bank.Models[winner].ID, Probability: weights[winner] / total, ParsedCount: len(numbers)}, snapshot, nil
 }
 
 func currentModelTraceBank() (*modelTraceVersion, error) {

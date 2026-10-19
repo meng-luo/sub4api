@@ -290,7 +290,7 @@ func (h *AccountHandler) GetCodexTicketInvalidation(c *gin.Context) {
 }
 
 func (h *AccountHandler) GetCodexFingerprintVersion(c *gin.Context) {
-	models, err := service.ModelTraceGPTModels()
+	models, err := service.ModelTraceDiagnosticModels()
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -308,7 +308,7 @@ func (h *AccountHandler) RefreshCodexFingerprint(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	models, err := service.ModelTraceGPTModels()
+	models, err := service.ModelTraceDiagnosticModels()
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

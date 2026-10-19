@@ -66,10 +66,19 @@ func TestEvaluateCodexDiagnosticVerdicts(t *testing.T) {
 		require.Greater(t, verdict.Probability, 0.0)
 	})
 
-	t.Run("fingerprint-less model only reaches uncertain", func(t *testing.T) {
+	t.Run("shared astra fingerprint passes without changing predicted class", func(t *testing.T) {
+		astraText, astraExpected := referenceSampleText(t, "gpt-6-astra")
+		verdict := EvaluateCodexDiagnostic("gpt-6.1-sol", astraText, ModelTraceChallenge{ExpectedCount: astraExpected})
+		require.Equal(t, "normal", verdict.Status)
+		require.Equal(t, "shared_fingerprint_match", verdict.Reason)
+		require.Equal(t, "gpt-6-astra", verdict.PredictedModel)
+		require.Greater(t, verdict.Probability, 0.0)
+	})
+
+	t.Run("previous sol reference is outside the shared group", func(t *testing.T) {
 		verdict := EvaluateCodexDiagnostic("gpt-6.1-sol", text, challenge)
-		require.Equal(t, "uncertain", verdict.Status)
-		require.Equal(t, "reference_class_unavailable", verdict.Reason)
+		require.Equal(t, "degraded", verdict.Status)
+		require.Equal(t, "fingerprint_mismatch", verdict.Reason)
 		require.Equal(t, "gpt-6-sol", verdict.PredictedModel)
 	})
 
@@ -87,4 +96,36 @@ func TestEvaluateCodexDiagnosticVerdicts(t *testing.T) {
 		require.Equal(t, 3, verdict.ParsedCount)
 		require.Empty(t, verdict.PredictedModel)
 	})
+}
+
+func TestModelTraceSharedFingerprintPrefersIndependentClassAfterRefresh(t *testing.T) {
+	bank, err := parseModelTraceBank(embeddedModelTraceBank)
+	require.NoError(t, err)
+	for index, model := range bank.Models {
+		if model.ID == "gpt-6-sol" {
+			bank.Models[index].ID = "gpt-6.1-sol"
+			bank.Robust.ModelOrder[index] = "gpt-6.1-sol"
+		}
+	}
+	previous := modelTraceActive.Load()
+	t.Cleanup(func() { modelTraceActive.Store(previous) })
+	modelTraceActive.Store(&modelTraceVersion{bank: bank, commit: "independent-class-test"})
+
+	text, expected := referenceSampleText(t, "gpt-6-astra")
+	verdict := EvaluateCodexDiagnostic("gpt-6.1-sol", text, ModelTraceChallenge{ExpectedCount: expected})
+	require.Equal(t, "degraded", verdict.Status, "an independent class must disable the shared fallback")
+	require.Equal(t, "gpt-6-astra", verdict.PredictedModel)
+
+	text, expected = referenceSampleText(t, "gpt-6-sol")
+	verdict = EvaluateCodexDiagnostic("gpt-6.1-sol", text, ModelTraceChallenge{ExpectedCount: expected})
+	require.Equal(t, "normal", verdict.Status)
+	require.Empty(t, verdict.Reason)
+	require.Equal(t, "gpt-6.1-sol", verdict.PredictedModel)
+
+	for _, list := range []func() ([]string, error){ModelTraceDiagnosticModels, ModelTraceTicketModels} {
+		models, err := list()
+		require.NoError(t, err)
+		require.Contains(t, models, "gpt-6.1-sol")
+		require.Empty(t, duplicateValues(models))
+	}
 }

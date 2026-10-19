@@ -168,6 +168,27 @@ describe('Codex diagnostic modal', () => {
     wrapper.unmount()
   })
 
+  it('labels a shared fingerprint match and preserves the actual predicted model', async () => {
+    fingerprint.mockResolvedValue({ commit: 'abc123', models: ['gpt-6.1-sol', 'gpt-6-astra'] })
+    diagnose.mockResolvedValue({ items: [{
+      model: 'gpt-6.1-sol', status: 'normal', reason: 'shared_fingerprint_match',
+      predicted_model: 'gpt-6-astra', probability: 0.99
+    }] })
+    const wrapper = mountModal()
+    await flushPromises()
+    await configure(wrapper, ['gpt-6.1-sol']).runDiagnostic()
+    await flushPromises()
+    const result = wrapper.get('[data-model="gpt-6.1-sol"]')
+    expect(result.attributes('data-status')).toBe('normal')
+    expect(result.text()).toContain('同组指纹通过')
+    expect(result.text()).toContain('暂不能区分 gpt-6.1-sol 与 gpt-6-astra')
+    expect(result.text()).not.toContain('响应特征与目标模型匹配')
+    await result.get('button[aria-expanded]').trigger('click')
+    expect(result.get('dl').text()).toContain('gpt-6-astra')
+    expect(result.get('dl').text()).not.toContain('shared_fingerprint_match')
+    wrapper.unmount()
+  })
+
   it('retains completed results when cancelled and marks unfinished and unstarted models separately', async () => {
     const second = deferred()
     diagnose.mockResolvedValueOnce({ items: [{ model: 'gpt-5.6-sol', status: 'normal' }] })

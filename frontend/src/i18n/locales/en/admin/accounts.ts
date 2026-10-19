@@ -84,6 +84,8 @@ export default {
         "reason": "Reason",
         "httpStatus": "HTTP status",
         "templateInvalid": "The shared template is invalid. Correct it in system settings and retry.",
+        "sharedFingerprintMatch": "Shared fingerprint match",
+        "sharedFingerprintHint": "The response matches the shared fingerprint group; gpt-6.1-sol and gpt-6-astra cannot currently be distinguished.",
         "failureHint": "A request failure does not imply model degradation. Repeat uncertain or potentially degraded results to confirm.",
         "missingResult": "No result was returned for this model",
         "close": "Close model degradation check",

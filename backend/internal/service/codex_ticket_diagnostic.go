@@ -110,27 +110,23 @@ type CodexDiagnosticVerdict struct {
 
 // EvaluateCodexDiagnostic 把探测输出与请求模型比对。
 //
-// 指纹库是闭集：请求的模型若不在库中（当前只有 gpt-6.1-sol），分类器永远
-// 不会返回它的 ID。此时用同系列参考类兜底判定——命中参考类报 uncertain
-// （库缺类，无法确认具体版本），命中其它任何 GPT 类才是 degraded。这样
-// 健康的 6.1-sol 不会被误判成降智，而降级到 5.6/其它系列仍会被抓到。
+// Models without an independent class can pass a configured shared fingerprint.
+// Preserve the predicted class so a group match does not imply exact identity.
 func EvaluateCodexDiagnostic(model, output string, challenge ModelTraceChallenge) CodexDiagnosticVerdict {
-	prediction, _, err := ModelTracePredictCommitted(output, challenge.ExpectedCount)
+	prediction, snapshot, err := modelTracePredictSnapshot(output, challenge.ExpectedCount)
 	verdict := CodexDiagnosticVerdict{Status: "failed", Reason: "insufficient_numbers", ParsedCount: prediction.ParsedCount}
 	if err != nil {
 		return verdict
 	}
 	verdict.PredictedModel = prediction.Model
 	verdict.Probability = prediction.Probability
-	if prediction.Model == model {
-		return CodexDiagnosticVerdict{Status: "normal", PredictedModel: prediction.Model, Probability: prediction.Probability, ParsedCount: prediction.ParsedCount}
-	}
-	if reference, ok := modelTraceDiagnosticReferenceClass[model]; ok {
-		if prediction.Model == reference {
-			verdict.Status = "uncertain"
-			verdict.Reason = "reference_class_unavailable"
-			return verdict
+	if snapshot.bank.fingerprintMatches(model, prediction.Model) {
+		verdict.Status = "normal"
+		verdict.Reason = ""
+		if prediction.Model != model {
+			verdict.Reason = "shared_fingerprint_match"
 		}
+		return verdict
 	}
 	verdict.Status = "degraded"
 	verdict.Reason = "fingerprint_mismatch"

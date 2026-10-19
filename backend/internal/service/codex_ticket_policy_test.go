@@ -14,6 +14,7 @@ func TestCodexTicketModelBoundary(t *testing.T) {
 	}{
 		{"gpt-4.1", false}, {"gpt-5.4", false}, {"gpt-5.5", false},
 		{"gpt-5.5-pro", false}, {"gpt-5.6-sol", true}, {"gpt-6-astra", true},
+		{"gpt-6.1-sol", true},
 		{"claude-6", false},
 	} {
 		require.Equal(t, test.eligible, codexTicketEligibleModel(test.model), test.model)
@@ -21,6 +22,8 @@ func TestCodexTicketModelBoundary(t *testing.T) {
 	models, err := ModelTraceTicketModels()
 	require.NoError(t, err)
 	require.NotEmpty(t, models)
+	require.Contains(t, models, "gpt-6.1-sol")
+	require.True(t, modelTraceKnownGPTModel("gpt-6.1-sol"), "shared models must be accepted by history filters")
 	for _, model := range models {
 		require.True(t, codexTicketEligibleModel(model), model)
 	}

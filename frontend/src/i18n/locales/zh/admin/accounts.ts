@@ -84,6 +84,8 @@ export default {
         "reason": "原因",
         "httpStatus": "HTTP 状态码",
         "templateInvalid": "共享模板配置无效，请在系统设置中修正后重试。",
+        "sharedFingerprintMatch": "同组指纹通过",
+        "sharedFingerprintHint": "响应符合共享指纹组，暂不能区分 gpt-6.1-sol 与 gpt-6-astra。",
         "failureHint": "“请求失败”表示请求未完成，不代表模型降智。疑似降智或不确定的结果可以复测确认。",
         "missingResult": "未返回此模型的检测结果",
         "close": "关闭降智检测",

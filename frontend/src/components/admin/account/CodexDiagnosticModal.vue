@@ -84,8 +84,8 @@
                 <span v-if="entry.status === 'running'" class="h-4 w-4 animate-spin rounded-full border-2 border-current border-r-transparent motion-reduce:animate-none"></span>
                 <Icon v-else :name="statusIcon(entry.status)" size="sm" />
               </span>
-              <div class="diagnostic-result-model min-w-0 flex-1"><h4 class="font-mono text-[13px] font-medium leading-6 text-gray-900 [overflow-wrap:anywhere] dark:text-white">{{ entry.model }}</h4><p class="mt-0.5 text-xs leading-5 text-gray-500 dark:text-dark-400">{{ text('caption.' + entry.status) }}</p></div>
-              <span class="diagnostic-result-badge shrink-0 rounded-md px-2 py-1 text-xs font-medium" :class="statusTone(entry.status)">{{ text('status.' + entry.status) }}</span>
+              <div class="diagnostic-result-model min-w-0 flex-1"><h4 class="font-mono text-[13px] font-medium leading-6 text-gray-900 [overflow-wrap:anywhere] dark:text-white">{{ entry.model }}</h4><p class="mt-0.5 text-xs leading-5 text-gray-500 dark:text-dark-400">{{ text(entry.result?.reason === 'shared_fingerprint_match' ? 'sharedFingerprintHint' : 'caption.' + entry.status) }}</p></div>
+              <span class="diagnostic-result-badge shrink-0 rounded-md px-2 py-1 text-xs font-medium" :class="statusTone(entry.status)">{{ text(entry.result?.reason === 'shared_fingerprint_match' ? 'sharedFingerprintMatch' : 'status.' + entry.status) }}</span>
               <button v-if="entry.result" type="button" class="ml-auto flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 dark:text-dark-400 dark:hover:bg-dark-700" :aria-expanded="entry.expanded" :aria-controls="'codex-diagnostic-detail-' + index" :aria-label="text(entry.expanded ? 'hideDetails' : 'showDetails', { model: entry.model })" @click="entry.expanded = !entry.expanded"><Icon name="chevronDown" size="sm" :class="entry.expanded ? 'rotate-180' : ''" /></button>
               <span v-else class="ml-auto h-3 w-11 shrink-0 sm:h-11"></span>
             </div>
@@ -94,7 +94,7 @@
                 <div><dt class="text-gray-500 dark:text-dark-400">{{ text('prediction') }}</dt><dd class="mt-1 break-all font-mono text-gray-800 dark:text-dark-200">{{ entry.result.predicted_model || '—' }}</dd></div>
                 <div><dt class="text-gray-500 dark:text-dark-400">{{ text('probability') }}</dt><dd class="mt-1 text-gray-800 dark:text-dark-200">{{ entry.result.probability == null ? '—' : (entry.result.probability * 100).toFixed(1) + '%' }}</dd></div>
               </template>
-              <div v-if="entry.result.reason" class="sm:col-span-2"><dt class="text-gray-500 dark:text-dark-400">{{ text('reason') }}</dt><dd class="mt-1 whitespace-pre-wrap break-words text-gray-800 [overflow-wrap:anywhere] dark:text-dark-200">{{ entry.result.reason === 'template_invalid' ? text('templateInvalid') : entry.result.reason }}</dd></div>
+              <div v-if="entry.result.reason" class="sm:col-span-2"><dt class="text-gray-500 dark:text-dark-400">{{ text('reason') }}</dt><dd class="mt-1 whitespace-pre-wrap break-words text-gray-800 [overflow-wrap:anywhere] dark:text-dark-200">{{ entry.result.reason === 'template_invalid' ? text('templateInvalid') : entry.result.reason === 'shared_fingerprint_match' ? text('sharedFingerprintHint') : entry.result.reason }}</dd></div>
               <div v-if="entry.result.http_status" class="sm:col-span-2"><dt class="text-gray-500 dark:text-dark-400">{{ text('httpStatus') }}</dt><dd class="mt-1 break-all text-gray-800 dark:text-dark-200">HTTP {{ entry.result.http_status }}</dd></div>
               <div class="sm:col-span-2"><dt class="text-gray-500 dark:text-dark-400">{{ text('fingerprint') }}</dt><dd class="mt-1 break-all font-mono text-gray-800 dark:text-dark-200">{{ diagnosticRun.fingerprintCommit || '—' }}</dd></div>
             </dl>

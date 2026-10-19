@@ -172,3 +172,58 @@ func TestCodexTicketChallengeFailureRecordsErrorWithoutRequest(t *testing.T) {
 	_, scheduled := svc.openaiCodexTicketNextAttempt.Load(openAICodexTicketKey(account.ID, "gpt-6-astra"))
 	require.True(t, scheduled)
 }
+
+func TestCodexTicketSharedFingerprintHarvest(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		predicted     string
+		noCredentials bool
+		outcome       string
+		reason        string
+	}{
+		{name: "shared class accepted", predicted: "gpt-6-astra", outcome: "success"},
+		{name: "unrelated class rejected", predicted: "gpt-6-sol", outcome: "miss", reason: "fingerprint_mismatch"},
+		{name: "credentials still required", predicted: "gpt-6-astra", noCredentials: true, outcome: "miss", reason: "missing_credentials"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			output, expected := referenceSampleText(t, test.predicted)
+			upstream := &codexTicketFuncUpstream{do: func(req *http.Request) (*http.Response, error) {
+				body, err := io.ReadAll(req.Body)
+				require.NoError(t, err)
+				require.Equal(t, "gpt-6.1-sol", gjson.GetBytes(body, "model").String())
+				response := challengeHarvestResponse(t, output)
+				if test.noCredentials {
+					response.Header.Del(openAICodexTurnStateHeader)
+					response.Header.Del("Set-Cookie")
+				}
+				return response, nil
+			}}
+			svc, account, history := challengeHarvestService(t, upstream)
+			svc.cfg.Gateway.OpenAICodexTicket.FailClosed = true
+			require.True(t, svc.codexTicketSupportedModel("gpt-6.1-sol"))
+			result, err := svc.runCodexTicketAttemptWithChallengeGenerator(context.Background(), account, "gpt-6.1-sol", "manual", func() (ModelTraceChallenge, error) {
+				return ModelTraceChallenge{Prompt: "shared fingerprint challenge", ExpectedCount: expected}, nil
+			})
+			require.NoError(t, err)
+			require.Equal(t, test.outcome, result.Outcome)
+			require.Equal(t, test.reason, result.ReasonCode)
+			require.Equal(t, test.predicted, result.FingerprintPredictedModel)
+			require.Equal(t, test.predicted == "gpt-6-astra", *result.FingerprintMatched)
+			require.Len(t, history.attempts, 1)
+			require.Equal(t, "gpt-6.1-sol", history.attempts[0].Model)
+			require.Equal(t, test.predicted, history.attempts[0].FingerprintPredictedModel)
+			require.Nil(t, svc.lookupOpenAICodexTicket(account, "gpt-6-astra"))
+			ticket := svc.lookupOpenAICodexTicket(account, "gpt-6.1-sol")
+			if test.outcome != "success" {
+				require.Nil(t, ticket)
+				return
+			}
+			require.NotNil(t, ticket)
+			require.Equal(t, "gpt-6.1-sol", ticket.Model)
+			headers := http.Header{}
+			require.NoError(t, svc.applyOpenAICodexTicket(context.Background(), account, "gpt-6.1-sol", headers))
+			require.Equal(t, ticket.State, headers.Get(openAICodexTurnStateHeader))
+			require.ErrorIs(t, svc.applyOpenAICodexTicket(context.Background(), account, "gpt-6-astra", http.Header{}), ErrOpenAICodexTicketUnavailable)
+		})
+	}
+}

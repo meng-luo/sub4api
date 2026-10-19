@@ -1,11 +1,14 @@
 package admin
 
 import (
+	"net/http/httptest"
 	"testing"
 
 	"github.com/MACOS-DO/sub4api/internal/config"
 	"github.com/MACOS-DO/sub4api/internal/service"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestAccountResponseCodexTicketsUsesConfiguredPolicy(t *testing.T) {
@@ -26,6 +29,19 @@ func TestAccountResponseCodexTicketsUsesConfiguredPolicy(t *testing.T) {
 	require.False(t, status[0].Blocked)
 	h.cfg.Gateway.OpenAICodexTicket.FailClosed = true
 	require.True(t, h.accountResponseFromService(account).CodexTurnTickets[0].Blocked)
+}
+
+func TestCodexFingerprintVersionIncludesSharedModel(t *testing.T) {
+	writer := httptest.NewRecorder()
+	client, _ := gin.CreateTestContext(writer)
+	(&AccountHandler{}).GetCodexFingerprintVersion(client)
+	var models []string
+	for _, model := range gjson.GetBytes(writer.Body.Bytes(), "data.models").Array() {
+		models = append(models, model.String())
+	}
+	require.Equal(t, 200, writer.Code)
+	require.Contains(t, models, "gpt-6.1-sol")
+	require.Contains(t, models, "gpt-6-astra")
 }
 
 func TestAccountResponseCodexTicketsReadsLiveSettingsAfterRestart(t *testing.T) {
