@@ -1266,6 +1266,13 @@ export default {
       bedrockApiKeyLeaveEmpty: 'Leave empty to keep current key',
       apiKeyIsRequired: 'API Key is required',
       leaveEmptyToKeep: 'Leave empty to keep current key',
+      anthropicOAuthCredentials: {
+        title: 'OAuth Credentials',
+        keepToken: 'Leave blank to keep the existing token',
+        expiresAt: 'Credentials Expire At',
+        expiresAtHint: 'Leave blank if the expiration time is unknown.',
+        invalidExpiresAt: 'Enter a valid credential expiration time'
+      },
       // Upstream type
       upstream: {
         baseUrl: 'Upstream Base URL',

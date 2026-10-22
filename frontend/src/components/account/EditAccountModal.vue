@@ -28,6 +28,47 @@
 
       <OpenAIBPSAccountFields v-if="account.platform === 'openai_bps'" v-model="bpsDraft" editing :expires-at="String(account.credentials?.expires_at ?? '')" :credential-state="account.bps_credential_state" :account-status="account.status" :schedulable="account.schedulable" />
 
+      <fieldset v-if="isAnthropicOAuthAccount" class="space-y-4" data-testid="anthropic-oauth-credentials">
+        <legend class="input-label">{{ t('admin.accounts.anthropicOAuthCredentials.title') }}</legend>
+        <div>
+          <label for="edit-anthropic-access-token" class="input-label">Access Token</label>
+          <input
+            id="edit-anthropic-access-token"
+            v-model="editAnthropicAccessToken"
+            type="password"
+            autocomplete="off"
+            class="input"
+            :placeholder="t('admin.accounts.anthropicOAuthCredentials.keepToken')"
+          />
+        </div>
+        <div>
+          <label for="edit-anthropic-refresh-token" class="input-label">Refresh Token</label>
+          <input
+            id="edit-anthropic-refresh-token"
+            v-model="editAnthropicRefreshToken"
+            type="password"
+            autocomplete="off"
+            class="input"
+            :placeholder="t('admin.accounts.anthropicOAuthCredentials.keepToken')"
+          />
+        </div>
+        <div>
+          <label for="edit-anthropic-credentials-expires-at" class="input-label">
+            {{ t('admin.accounts.anthropicOAuthCredentials.expiresAt') }}
+          </label>
+          <input
+            id="edit-anthropic-credentials-expires-at"
+            v-model="editAnthropicCredentialsExpiresAt"
+            type="datetime-local"
+            class="input"
+          />
+          <p class="input-hint">
+            {{ t('admin.accounts.anthropicOAuthCredentials.expiresAtHint') }}
+            {{ t('admin.accounts.expiresAtTimezoneHint', { timezone: browserTimeZone }) }}
+          </p>
+        </div>
+      </fieldset>
+
       <!-- API Key fields (only for apikey type) -->
       <div v-if="account.type === 'apikey'" class="space-y-4">
         <div v-if="!isCNApiKeyAccount || editApiProtocol !== 'adaptive'">
@@ -3453,6 +3494,13 @@ interface TempUnschedRuleForm {
 const submitting = ref(false)
 const editBaseUrl = ref('https://api.anthropic.com')
 const editApiKey = ref('')
+const isAnthropicOAuthAccount = computed(
+  () => props.account?.platform === 'anthropic' && props.account.type === 'oauth'
+)
+const editAnthropicAccessToken = ref('')
+const editAnthropicRefreshToken = ref('')
+const editAnthropicCredentialsExpiresAt = ref('')
+const initialAnthropicCredentialsExpiresAt = ref('')
 
 // ── 国产供应商（Kimi / Zhipu / DeepSeek）account_mode / api_protocol 编辑 ──
 // account_mode 决定额度/余额监控路径，api_protocol 决定转发端点与格式；
@@ -4274,6 +4322,19 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 
   // Load intercept warmup requests setting (applies to all account types)
   const credentials = newAccount.credentials as Record<string, unknown> | undefined
+  editAnthropicAccessToken.value = ''
+  editAnthropicRefreshToken.value = ''
+  editAnthropicCredentialsExpiresAt.value = ''
+  if (isAnthropicOAuthAccount.value) {
+    const rawExpiry = credentials?.expires_at
+    if (typeof rawExpiry === 'number' || typeof rawExpiry === 'string') {
+      const timestamp = Number(rawExpiry)
+      editAnthropicCredentialsExpiresAt.value = formatDateTimeLocalInput(
+        Number.isFinite(timestamp) ? timestamp : Date.parse(String(rawExpiry)) / 1000
+      )
+    }
+  }
+  initialAnthropicCredentialsExpiresAt.value = editAnthropicCredentialsExpiresAt.value
   interceptWarmupRequests.value = credentials?.intercept_warmup_requests === true
   autoPauseOnExpired.value = newAccount.auto_pause_on_expired === true
   editVertexProjectId.value = ''
@@ -5571,9 +5632,26 @@ const handleSubmit = async () => {
 
       updatePayload.credentials = newCredentials
     } else {
-      // For oauth/setup-token types, only update intercept_warmup_requests if changed
+      // OAuth/setup-token credentials also hold scheduling settings.
       const currentCredentials = (props.account.credentials as Record<string, unknown>) || {}
       const newCredentials: Record<string, unknown> = { ...currentCredentials }
+
+      if (isAnthropicOAuthAccount.value) {
+        if (editAnthropicAccessToken.value.trim()) {
+          newCredentials.access_token = editAnthropicAccessToken.value.trim()
+        }
+        if (editAnthropicRefreshToken.value.trim()) {
+          newCredentials.refresh_token = editAnthropicRefreshToken.value.trim()
+        }
+        if (editAnthropicCredentialsExpiresAt.value !== initialAnthropicCredentialsExpiresAt.value) {
+          const expiresAt = parseDateTimeLocalInput(editAnthropicCredentialsExpiresAt.value)
+          if (editAnthropicCredentialsExpiresAt.value && expiresAt === null) {
+            appStore.showError(t('admin.accounts.anthropicOAuthCredentials.invalidExpiresAt'))
+            return
+          }
+          newCredentials.expires_at = expiresAt === null ? '' : String(expiresAt)
+        }
+      }
 
       applyInterceptWarmup(newCredentials, interceptWarmupRequests.value, 'edit')
       applyAccountSchedulingThresholdOverridePatch(newCredentials, currentCredentials)

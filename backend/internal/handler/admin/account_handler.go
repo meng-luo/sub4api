@@ -1260,6 +1260,18 @@ func (h *AccountHandler) Update(c *gin.Context) {
 		return
 	}
 
+	// Manual Anthropic OAuth edits must stop using the cached token and expiry.
+	if account.Platform == service.PlatformAnthropic && account.Type == service.AccountTypeOAuth && h.tokenCacheInvalidator != nil {
+		for _, key := range []string{"access_token", "refresh_token", "expires_at"} {
+			if _, provided := req.Credentials[key]; provided {
+				if err := h.tokenCacheInvalidator.InvalidateToken(c.Request.Context(), account); err != nil {
+					slog.Warn("update_account.invalidate_token_failed", "account_id", accountID, "err", err)
+				}
+				break
+			}
+		}
+	}
+
 	// OpenAI APIKey: credentials 修改后重新探测上游能力（base_url/api_key 可能变更）。
 	// 异步执行，探测失败不影响账号更新响应。
 	if len(req.Credentials) > 0 {

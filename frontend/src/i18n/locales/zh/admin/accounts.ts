@@ -1368,6 +1368,13 @@ export default {
       bedrockApiKeyLeaveEmpty: '留空以保持当前密钥',
       apiKeyIsRequired: 'API Key 是必需的',
       leaveEmptyToKeep: '留空以保持当前密钥',
+      anthropicOAuthCredentials: {
+        title: 'OAuth 凭据',
+        keepToken: '留空保留现有 Token',
+        expiresAt: '凭据过期时间',
+        expiresAtHint: '留空表示过期时间未知。',
+        invalidExpiresAt: '请输入有效的凭据过期时间'
+      },
       // Upstream type
       upstream: {
         baseUrl: '上游 Base URL',

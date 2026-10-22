@@ -308,6 +308,20 @@ function buildOpenAIOAuthParentAccount() {
   } as any
 }
 
+function buildAnthropicOAuthAccount() {
+  return {
+    ...buildAccount(),
+    platform: 'anthropic',
+    type: 'oauth',
+    credentials: {
+      expires_at: '1893456037',
+      scope: 'user:inference',
+      intercept_warmup_requests: true
+    },
+    credentials_status: { has_access_token: true, has_refresh_token: true }
+  } as any
+}
+
 function mountModal(account = buildAccount(), renderGroupSelector = false) {
   return mount(EditAccountModal, {
     props: {
@@ -335,6 +349,133 @@ describe('EditAccountModal', () => {
   })
 
   afterEach(() => vi.useRealTimers())
+
+  describe('Anthropic OAuth credentials', () => {
+    beforeEach(() => {
+      updateAccountMock.mockReset().mockResolvedValue(buildAnthropicOAuthAccount())
+      checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    })
+
+    it.each([
+      ['anthropic', 'setup-token'],
+      ['anthropic', 'apikey'],
+      ['anthropic', 'service_account'],
+      ['anthropic', 'bedrock'],
+      ['openai', 'oauth'],
+      ['gemini', 'oauth'],
+      ['grok', 'oauth'],
+      ['antigravity', 'oauth']
+    ])('does not show credential fields for %s %s', (platform, type) => {
+      const wrapper = mountModal({ ...buildAccount(), platform, type })
+      expect(wrapper.find('[data-testid="anthropic-oauth-credentials"]').exists()).toBe(false)
+      wrapper.unmount()
+    })
+
+    it.each([
+      1893456037,
+      '1893456037',
+      '2030-01-01T00:00:37Z'
+    ])('loads credential expiry %s without exposing tokens or changing the stored precision', async (expiry) => {
+      const account = buildAnthropicOAuthAccount()
+      account.credentials.expires_at = expiry
+      account.credentials.access_token = 'legacy-access-token'
+      account.credentials.refresh_token = 'legacy-refresh-token'
+      const wrapper = mountModal(account)
+      expect(wrapper.get<HTMLInputElement>('#edit-anthropic-access-token').element.value).toBe('')
+      expect(wrapper.get<HTMLInputElement>('#edit-anthropic-refresh-token').element.value).toBe('')
+      expect(wrapper.get('#edit-anthropic-access-token').attributes('type')).toBe('password')
+      expect(wrapper.get('#edit-anthropic-refresh-token').attributes('type')).toBe('password')
+      const expected = new Date(Number.isFinite(Number(expiry)) ? Number(expiry) * 1000 : String(expiry))
+      const inputValue = wrapper.get<HTMLInputElement>('#edit-anthropic-credentials-expires-at').element.value
+      expect(new Date(inputValue).getTime()).toBe(Math.floor(expected.getTime() / 60000) * 60000)
+
+      await wrapper.get('form').trigger('submit.prevent')
+      expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).toMatchObject(account.credentials)
+      wrapper.unmount()
+    })
+
+    it('saves both tokens and credential expiry independently of account expiry', async () => {
+      const account = buildAnthropicOAuthAccount()
+      account.expires_at = 1956528000
+      const wrapper = mountModal(account)
+      await wrapper.get('#edit-anthropic-access-token').setValue(' new-access-token ')
+      await wrapper.get('#edit-anthropic-refresh-token').setValue(' new-refresh-token ')
+      await wrapper.get('#edit-anthropic-credentials-expires-at').setValue('2030-06-15T09:30')
+      await wrapper.get('form').trigger('submit.prevent')
+
+      expect(updateAccountMock.mock.calls[0]?.[1]).toMatchObject({
+        expires_at: 1956528000,
+        credentials: {
+          access_token: 'new-access-token',
+          refresh_token: 'new-refresh-token',
+          expires_at: String(new Date('2030-06-15T09:30').getTime() / 1000),
+          scope: 'user:inference',
+          intercept_warmup_requests: true
+        }
+      })
+      wrapper.unmount()
+    })
+
+    it.each(['access_token', 'refresh_token'])('allows replacing only %s while retaining the other token', async (key) => {
+      const wrapper = mountModal(buildAnthropicOAuthAccount())
+      const input = key === 'access_token' ? '#edit-anthropic-access-token' : '#edit-anthropic-refresh-token'
+      await wrapper.get(input).setValue(' replacement-token ')
+      await wrapper.get('form').trigger('submit.prevent')
+
+      const credentials = updateAccountMock.mock.calls[0]?.[1]?.credentials
+      expect(credentials[key]).toBe('replacement-token')
+      expect(credentials).not.toHaveProperty(key === 'access_token' ? 'refresh_token' : 'access_token')
+      expect(credentials.expires_at).toBe('1893456037')
+      wrapper.unmount()
+    })
+
+    it('omits blank token replacements when editing only the expiry', async () => {
+      const wrapper = mountModal(buildAnthropicOAuthAccount())
+      await wrapper.get('#edit-anthropic-access-token').setValue('   ')
+      await wrapper.get('#edit-anthropic-refresh-token').setValue('   ')
+      await wrapper.get('#edit-anthropic-credentials-expires-at').setValue('2030-06-15T09:30')
+      await wrapper.get('form').trigger('submit.prevent')
+
+      const credentials = updateAccountMock.mock.calls[0]?.[1]?.credentials
+      expect(credentials).not.toHaveProperty('access_token')
+      expect(credentials).not.toHaveProperty('refresh_token')
+      expect(credentials.expires_at).toBe(String(new Date('2030-06-15T09:30').getTime() / 1000))
+      wrapper.unmount()
+    })
+
+    it('can clear credential expiry without clearing tokens', async () => {
+      const wrapper = mountModal(buildAnthropicOAuthAccount())
+      await wrapper.get('#edit-anthropic-credentials-expires-at').setValue('')
+      await wrapper.get('form').trigger('submit.prevent')
+      expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).toMatchObject({ expires_at: '' })
+      expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).not.toHaveProperty('access_token')
+      expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).not.toHaveProperty('refresh_token')
+      wrapper.unmount()
+    })
+
+    it('discards unsaved credentials on reopen and when switching accounts', async () => {
+      const account = buildAnthropicOAuthAccount()
+      const wrapper = mountModal(account)
+      await wrapper.get('#edit-anthropic-access-token').setValue('unsaved-access')
+      await wrapper.get('#edit-anthropic-refresh-token').setValue('unsaved-refresh')
+      await wrapper.get('#edit-anthropic-credentials-expires-at').setValue('2031-01-01T00:00')
+      await wrapper.setProps({ show: false })
+      await wrapper.setProps({ show: true })
+      expect(wrapper.get<HTMLInputElement>('#edit-anthropic-access-token').element.value).toBe('')
+      expect(wrapper.get<HTMLInputElement>('#edit-anthropic-refresh-token').element.value).toBe('')
+      expect(wrapper.get<HTMLInputElement>('#edit-anthropic-credentials-expires-at').element.value).not.toBe('2031-01-01T00:00')
+
+      await wrapper.get('#edit-anthropic-access-token').setValue('another-unsaved-token')
+      await wrapper.setProps({ account: buildOpenAIOAuthParentAccount() })
+      await wrapper.get('form').trigger('submit.prevent')
+      expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.access_token).toBe('oauth-token')
+      await wrapper.setProps({ account: { ...account, id: 8, credentials: {} } })
+      expect(wrapper.get<HTMLInputElement>('#edit-anthropic-access-token').element.value).toBe('')
+      expect(wrapper.get<HTMLInputElement>('#edit-anthropic-refresh-token').element.value).toBe('')
+      expect(wrapper.get<HTMLInputElement>('#edit-anthropic-credentials-expires-at').element.value).toBe('')
+      wrapper.unmount()
+    })
+  })
 
   it('passes existing non-identity mappings to the whitelist selector and preserves them on save', async () => {
     const account = buildAccount()
