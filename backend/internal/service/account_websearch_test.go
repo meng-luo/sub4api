@@ -114,6 +114,24 @@ func TestGetWebSearchEmulationMode_UnsupportedPlatform(t *testing.T) {
 	require.Equal(t, WebSearchModeDefault, a.GetWebSearchEmulationMode())
 }
 
+func TestGetWebSearchEmulationMode_OpenAIOAuth(t *testing.T) {
+	a := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Extra:    map[string]any{featureKeyWebSearchEmulation: "enabled"},
+	}
+	require.Equal(t, WebSearchModeDefault, a.GetWebSearchEmulationMode())
+}
+
+func TestGetWebSearchEmulationMode_OtherPlatform(t *testing.T) {
+	a := &Account{
+		Platform: PlatformGemini,
+		Type:     AccountTypeAPIKey,
+		Extra:    map[string]any{featureKeyWebSearchEmulation: "enabled"},
+	}
+	require.Equal(t, WebSearchModeDefault, a.GetWebSearchEmulationMode())
+}
+
 func TestGetWebSearchEmulationMode_NonAPIKeyType(t *testing.T) {
 	for _, platform := range []string{PlatformAnthropic, PlatformOpenAI, PlatformOpenAIBPS, PlatformAntigravity} {
 		t.Run(platform, func(t *testing.T) {

@@ -172,5 +172,6 @@ issues/
 scripts/*
 !scripts/release/
 !scripts/release/**
+!scripts/sync-upstream-migration-checksums.sh
 __pycache__/
 *.pyc

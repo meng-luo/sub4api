@@ -30,6 +30,56 @@ func (r *nativeProbeAccountRepo) GetByID(_ context.Context, id int64) (*Account,
 // nativeProbeUnrelatedUserKey 是任何请求都不应携带的“用户侧 API Key”哨兵。
 const nativeProbeUnrelatedUserKey = "sk-user-key-native-probe-must-not-use"
 
+type nativeDiagnosticProxyUpstream struct {
+	HTTPUpstream
+	proxyURL string
+}
+
+func (u *nativeDiagnosticProxyUpstream) Do(_ *http.Request, proxyURL string, _ int64, _ int) (*http.Response, error) {
+	u.proxyURL = proxyURL
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{},
+		Body:       io.NopCloser(strings.NewReader("data: {\"type\":\"response.output_text.delta\",\"delta\":\"73 12 91 4\"}\n\ndata: [DONE]\n\n")),
+	}, nil
+}
+
+func TestRunCodexNativeDiagnosticFollowsTicketProxySource(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		source    string
+		withProxy bool
+		emptyPool bool
+		wantProxy string
+	}{
+		{name: "pool", source: CodexTicketProxySourcePool, withProxy: true, wantProxy: "http://proxy.example.com:8080"},
+		{name: "account", source: CodexTicketProxySourceAccount, withProxy: true, wantProxy: "http://account.example.com:8080"},
+		{name: "account direct", source: CodexTicketProxySourceAccount},
+		{name: "empty pool direct fallback", source: CodexTicketProxySourcePool, emptyPool: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			upstream := &nativeDiagnosticProxyUpstream{}
+			svc, account, _ := challengeHarvestService(t, upstream)
+			repo := newRuntimeSettingRepoStub()
+			repo.values[codexTicketProxySourceSettingKey] = tc.source
+			if tc.emptyPool {
+				repo.values[codexTicketPoolSettingKey] = `{"mode":"custom","proxy_ids":[99]}`
+			}
+			svc.settingService.settingRepo = repo
+			if tc.withProxy {
+				id := int64(7)
+				account.ProxyID = &id
+				account.Proxy = &Proxy{ID: id, Protocol: "http", Host: "account.example.com", Port: 8080, Status: StatusActive}
+			}
+			result := svc.RunCodexNativeDiagnostic(context.Background(), account.ID, "gpt-6-astra",
+				ModelTraceChallenge{Prompt: "challenge", ExpectedCount: 4}, 2*time.Second)
+			require.Empty(t, result.Reason)
+			require.Equal(t, "73 12 91 4", result.Output)
+			require.Equal(t, tc.wantProxy, upstream.proxyURL)
+		})
+	}
+}
+
 func TestRunCodexNativeDiagnosticSuccessUsesAccountToken(t *testing.T) {
 	const model = "gpt-6-astra"
 	const streamed = "73 12 91 4"

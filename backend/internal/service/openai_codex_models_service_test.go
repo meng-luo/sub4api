@@ -334,6 +334,14 @@ func TestNewConfiguredCodexModelDescriptorUsesProviderMetadataAndSafeFallback(t 
 	require.Equal(t, "none", *claudeHaiku.DefaultReasoningLevel)
 	require.Equal(t, []string{"none"}, effortsFromConfiguredCodexLevels(claudeHaiku.SupportedReasoningLevels))
 
+	claudeHaiku55 := newConfiguredCodexModelDescriptor("claude-haiku-5-5")
+	require.Equal(t, "Claude Haiku 5.5", claudeHaiku55.DisplayName)
+	require.Equal(t, int64(1_000_000), claudeHaiku55.ContextWindow)
+	require.Equal(t, int64(1_000_000), claudeHaiku55.MaxContextWindow)
+	require.NotNil(t, claudeHaiku55.DefaultReasoningLevel)
+	require.Equal(t, "medium", *claudeHaiku55.DefaultReasoningLevel)
+	require.Equal(t, []string{"low", "medium", "high", "xhigh", "max"}, effortsFromConfiguredCodexLevels(claudeHaiku55.SupportedReasoningLevels))
+
 	gpt56 := newConfiguredCodexModelDescriptor("gpt-5.6-sol")
 	require.Equal(t, "GPT-5.6 Sol", gpt56.DisplayName)
 	require.Equal(t, "OpenAI GPT coding model routed through Sub2API.", gpt56.Description)
@@ -2403,7 +2411,7 @@ func TestFetchCodexModelsManifestAPIKeyDisablesResponsesLiteForAffectedModels(t 
 }
 
 func TestFetchCodexModelsManifestOAuthPreservesResponsesLite(t *testing.T) {
-	const manifestBody = ` {"models":[{"slug":"gpt-5.6-sol","use_responses_lite":true}]} `
+	const manifestBody = ` {"models":[{"slug":"gpt-5.6-sol","use_responses_lite":true},{"slug":"gpt-6.1-sol","context_window":500000,"max_context_window":1000000,"use_responses_lite":true}]} `
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(manifestBody))
 	}))
@@ -3796,14 +3804,16 @@ func TestGPT61SolCatalogAdvertisesOfficialReasoningAndToolMode(t *testing.T) {
 	require.NoError(t, json.Unmarshal(body, &catalog))
 	require.Len(t, catalog.Models, 1)
 	model := catalog.Models[0]
+	require.JSONEq(t, `"gpt-6.1-sol"`, string(model["slug"]))
 	require.JSONEq(t, `"low"`, string(model["default_reasoning_level"]))
 	require.JSONEq(t, `true`, string(model["use_responses_lite"]))
 	require.JSONEq(t, `"code_mode_only"`, string(model["tool_mode"]))
 	require.JSONEq(t, `true`, string(model["prefer_websockets"]))
-	require.JSONEq(t, `272000`, string(model["context_window"]))
+	require.JSONEq(t, `500000`, string(model["context_window"]))
 	require.JSONEq(t, `872000`, string(model["max_context_window"]))
 	require.JSONEq(t, `"xhigh"`, string(model["multi_agent_reasoning_effort"]))
 	require.JSONEq(t, `"v2"`, string(model["multi_agent_version"]))
+	require.JSONEq(t, `null`, string(model["default_service_tier"]))
 	var tiers []configuredCodexServiceTier
 	require.NoError(t, json.Unmarshal(model["service_tiers"], &tiers))
 	for _, tier := range tiers {
@@ -3858,5 +3868,39 @@ func TestAstraUltrafastCatalogUsesAccountCapabilities(t *testing.T) {
 		dst := map[string]json.RawMessage{"service_tiers": json.RawMessage(raw)}
 		require.False(t, applyCodexToolCapabilities(dst, map[string]json.RawMessage{"service_tiers": json.RawMessage(`[{"id":"priority"}]`)}, false))
 		require.JSONEq(t, raw, string(dst["service_tiers"]))
+	}
+}
+
+func TestGPT61SolAPIKeyCatalogUsesFullResponses(t *testing.T) {
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{"base_url": "https://api.openai.com"}}
+	body, err := completeAPIKeyCodexModelsManifestMetadata([]byte(`{"models":[{"slug":"gpt-6.1-sol"}]}`), true, account)
+	require.NoError(t, err)
+	var catalog struct {
+		Models []map[string]any `json:"models"`
+	}
+	require.NoError(t, json.Unmarshal(body, &catalog))
+	require.Equal(t, false, catalog.Models[0]["use_responses_lite"])
+	require.Equal(t, "low", catalog.Models[0]["default_reasoning_level"])
+}
+
+func TestGPT61SolAPIKeyCatalogContextWindow(t *testing.T) {
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{"base_url": "https://api.openai.com"}}
+	for _, tc := range []struct {
+		name string
+		body string
+		want int64
+	}{
+		{"missing uses updated default", `{"models":[{"slug":"gpt-6.1-sol"}]}`, 500_000},
+		{"null uses updated default", `{"models":[{"slug":"gpt-6.1-sol","context_window":null}]}`, 500_000},
+		{"lower upstream window is preserved", `{"models":[{"slug":"gpt-6.1-sol","context_window":272000}]}`, 272_000},
+		{"higher upstream window is preserved", `{"models":[{"slug":"gpt-6.1-sol","context_window":1000000,"max_context_window":1000000}]}`, 1_000_000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, err := completeAPIKeyCodexModelsManifestMetadata([]byte(tc.body), true, account)
+			require.NoError(t, err)
+			models := decodeCodexManifestModels(t, body)
+			require.Len(t, models, 1)
+			require.EqualValues(t, tc.want, models[0]["context_window"])
+		})
 	}
 }

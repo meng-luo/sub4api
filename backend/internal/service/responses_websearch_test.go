@@ -540,7 +540,7 @@ func TestHostedResponsesSearchBillsEachRoundWithoutFalseLongContextTier(t *testi
 	first := &OpenAIForwardResult{Model: "claude-sonnet-4", Usage: OpenAIUsage{InputTokens: 75, OutputTokens: 10}}
 	second := &OpenAIForwardResult{Model: "claude-sonnet-4", Usage: OpenAIUsage{InputTokens: 75, OutputTokens: 10}}
 	combined := mergeOpenAIWebSearchResult(mergeOpenAIWebSearchResult(nil, first), second)
-	cost, err := openAI.calculateOpenAIRecordUsageCost(context.Background(), combined, key, []string{"claude-sonnet-4"}, 1, 1, 1, 1, openAIResponsesWebSearchTokens(combined.Usage), "", &enabled, at)
+	cost, err := openAI.calculateOpenAIRecordUsageCost(context.Background(), combined, key, []string{"claude-sonnet-4"}, 1, 1, 1, 1, openAIResponsesWebSearchTokens(combined.Usage), "", &enabled, false, at)
 	require.NoError(t, err)
 	require.False(t, cost.LongContextBillingApplied)
 	require.InDelta(t, float64(150)*3e-6+float64(20)*15e-6, cost.TotalCost, 1e-12)
@@ -569,4 +569,46 @@ func TestHostedResponsesSearchPerRequestPricingStillChargesOnePublicRequest(t *t
 	cost := gateway.calculateRecordUsageCost(context.Background(), combined, key, "claude-sonnet-4", 1, 1, time.Unix(1700000000, 0))
 	require.Equal(t, string(BillingModePerRequest), cost.BillingMode)
 	require.InDelta(t, 0.05, cost.TotalCost, 1e-12)
+}
+
+func TestHostedResponsesSearchPreservesSubscriptionLongContextExemption(t *testing.T) {
+	for _, accountType := range []string{AccountTypeOAuth, AccountTypeAPIKey} {
+		t.Run(accountType, func(t *testing.T) {
+			usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+			userRepo := &openAIRecordUsageUserRepoStub{}
+			svc := newOpenAIRecordUsageServiceForTest(usageRepo, userRepo, &openAIRecordUsageSubRepoStub{}, nil)
+			key := openAIRecordUsageAPIKeyWithGroup(svc, 1, true)
+			key.GroupID = i64p(1)
+			key.Group.RateMultiplier = 1.1
+			svc.channelService = newTestChannelServiceForStats(t, &Channel{
+				ID: 1, Status: StatusActive, ApplyPricingToAccountStats: true,
+			}, 1, PlatformOpenAI)
+			account := &Account{
+				ID: 3, Platform: PlatformOpenAI, Type: accountType,
+				Extra: map[string]any{openAILongContextBillingEnabledKey: true},
+			}
+			var combined *OpenAIForwardResult
+			for range 2 {
+				combined = mergeOpenAIWebSearchResult(combined, &OpenAIForwardResult{
+					Model: "gpt-6.1-sol", UpstreamModel: "gpt-6.1-sol",
+					Usage: OpenAIUsage{InputTokens: 300000, OutputTokens: 2000},
+				})
+			}
+			err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+				Result: combined, APIKey: key, User: &User{ID: 2}, Account: account,
+			})
+			require.NoError(t, err)
+			wantTotal := 1.24
+			if accountType == AccountTypeAPIKey {
+				wantTotal = 2.46
+			}
+			require.NotNil(t, usageRepo.lastLog)
+			require.Equal(t, accountType == AccountTypeAPIKey, usageRepo.lastLog.LongContextBillingApplied)
+			require.InDelta(t, wantTotal, usageRepo.lastLog.TotalCost, 1e-12)
+			require.NotNil(t, usageRepo.lastLog.AccountStatsCost)
+			require.InDelta(t, wantTotal, *usageRepo.lastLog.AccountStatsCost, 1e-12)
+			require.Equal(t, 1, userRepo.deductCalls)
+			require.InDelta(t, wantTotal*1.1, userRepo.lastAmount, 1e-12)
+		})
+	}
 }

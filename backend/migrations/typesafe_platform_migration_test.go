@@ -8,12 +8,23 @@ import (
 )
 
 func TestTypeSafePlatformMigration(t *testing.T) {
-	content, err := FS.ReadFile("247_add_typesafe_platform.sql")
+	content, err := FS.ReadFile("241_add_typesafe_platform.sql")
 	require.NoError(t, err)
 
 	sql := strings.Join(strings.Fields(string(content)), " ")
 	require.Contains(t, sql, "DROP CONSTRAINT IF EXISTS user_platform_quotas_platform_check")
 	require.Contains(t, sql, "DROP CONSTRAINT IF EXISTS composite_model_routes_target_platform_check")
+	require.Contains(t, sql,
+		"CHECK (platform IN ('anthropic', 'openai', 'gemini', 'antigravity', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go', 'typesafe'))")
+	require.Contains(t, sql,
+		"CHECK (target_platform IN ('anthropic', 'openai', 'gemini', 'antigravity', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go', 'typesafe'))")
+}
+
+func TestLocalTypeSafePlatformMigrationPreservesOpenAIBPS(t *testing.T) {
+	content, err := FS.ReadFile("247_add_typesafe_platform.sql")
+	require.NoError(t, err)
+
+	sql := strings.Join(strings.Fields(string(content)), " ")
 	require.Contains(t, sql,
 		"CHECK (platform IN ('anthropic', 'openai', 'openai_bps', 'gemini', 'antigravity', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go', 'typesafe'))")
 	require.Contains(t, sql,

@@ -59,10 +59,9 @@ func (s *OpenAIGatewayService) RunCodexNativeDiagnostic(ctx context.Context, acc
 		result.Reason = "credentials"
 		return result
 	}
-	// 打票代理存在时与打票共用同一出口；没有配置代理时直连，探测不应该
-	// 因为"没开打票代理"而整体不可用。
+	// Follow the configured ticket egress source; an empty pool falls back to direct.
 	proxyURL := ""
-	if selected, _, proxyErr := s.chooseCodexTicketProxy(probeCtx, accountID, model); proxyErr == nil {
+	if selected, _, proxyErr := s.chooseCodexTicketProxy(probeCtx, account, model); proxyErr == nil {
 		proxyURL = selected
 	} else if !errors.Is(proxyErr, ErrCodexTicketNoProxy) {
 		result.Reason = "proxy_unavailable"
