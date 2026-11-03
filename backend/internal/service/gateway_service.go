@@ -690,7 +690,11 @@ type ForwardResult struct {
 	ServiceTier *string
 
 	// 图片生成计费字段（图片生成模型使用）
-	ImageCount             int    // 生成的图片数量
+	ImageCount int // 生成的图片数量
+	// ImageEndpoint 标记请求来自专用图片端点（/v1/images/*、图片模型端点）。
+	// 分组 image_count_billing 开关只对这类请求生效，混合的 Responses/Chat/WS
+	// 请求带图片工具时仍按 token 计费。
+	ImageEndpoint          bool
 	ImageSize              string // 最终计费尺寸 "1K", "2K", "4K"
 	ImageInputSize         string // 请求中的原始图片尺寸
 	ImageOutputSize        string // 上游响应中的图片尺寸
@@ -701,7 +705,6 @@ type ForwardResult struct {
 	AudioUsage             *AudioUsage
 	hostedSearchRounds     []*ForwardResult
 	hostedSearchRoundCosts []*CostBreakdown
-
 	// CacheStorageTokenHours 显式上下文缓存的存储量（缓存 token 数 × 存储小时数），按计费模型的
 	// 存储单价折算为费用后叠加在 token 费用之上。
 	CacheStorageTokenHours float64

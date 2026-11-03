@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/MACOS-DO/sub4api/internal/config"
+	"github.com/MACOS-DO/sub4api/internal/pkg/openai"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
@@ -297,7 +298,7 @@ func (runner *CodexHypothesisRunner) checkHeaders(request *http.Request, tickete
 		return errors.New("normal request path changed method, URL or Host")
 	}
 	if request.Header.Get("User-Agent") != buildCodexCLIUserAgent(codexHypothesisClientVersion) ||
-		request.Header.Get("originator") != "codex-tui" || request.Header.Get("version") != codexHypothesisClientVersion {
+		request.Header.Get("originator") != openai.CodexDefaultOriginator || request.Header.Get("version") != codexHypothesisClientVersion {
 		return errors.New("outbound Codex identity does not match pinned version")
 	}
 	runner.baselineMu.Lock()

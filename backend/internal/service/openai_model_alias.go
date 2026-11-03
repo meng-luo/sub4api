@@ -37,6 +37,9 @@ func normalizeKnownOpenAICodexModel(model string) string {
 		}
 	}
 
+	if openai.IsGPT61TerraModelSpelling(normalized) {
+		return "gpt-6.1-terra"
+	}
 	if openai.IsGPT6SolFamilyModelSpelling(normalized) {
 		switch {
 		case openai.IsGPT61SolModelSpelling(normalized):
@@ -163,5 +166,5 @@ func firstUsageBillingModel(candidates []string) string {
 	return ""
 }
 func isOpenAIGPT6Model(model string) bool {
-	return isOpenAIGPT6AstraModel(model) || openai.IsGPT6SolFamilyModelSpelling(model)
+	return openai.IsGPT61TerraModelSpelling(model) || isOpenAIGPT6AstraModel(model) || openai.IsGPT6SolFamilyModelSpelling(model)
 }

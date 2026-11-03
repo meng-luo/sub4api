@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/MACOS-DO/sub4api/internal/service"
 	"github.com/stretchr/testify/require"
@@ -14,6 +15,8 @@ import (
 func TestSchedulerCacheCodexTicketProjectionAndLegacyRebuild(t *testing.T) {
 	ctx := context.Background()
 	cache := newSchedulerCacheUnit(t)
+	now := time.Now()
+	cache.now = func() time.Time { return now }
 	account := service.Account{
 		ID: 991, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth,
 		Extra: map[string]any{
@@ -59,6 +62,8 @@ func TestSchedulerCacheCodexTicketProjectionAndLegacyRebuild(t *testing.T) {
 		raw, err := json.Marshal(legacy)
 		require.NoError(t, err)
 		require.NoError(t, cache.rdb.Set(ctx, schedulerAccountMetaKey("991"), raw, 0).Err())
+		// Legacy writers do not advance revisions; their data becomes visible at the cache age limit.
+		now = now.Add(schedulerSnapshotCacheMaxAge)
 		_, hit, err = cache.GetSnapshot(ctx, bucket)
 		require.NoError(t, err)
 		require.False(t, hit, "old metadata must cause DB fallback and republish")

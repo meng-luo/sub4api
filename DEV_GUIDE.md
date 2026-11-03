@@ -53,7 +53,7 @@ npm install -g pnpm
 
 ### CI 要求
 
-- Go 版本必须是 **1.27.0**：三个 workflow 都用 `go-version-file: backend/go.mod` 取版本，随后硬断言 `go version | grep -q 'go1.27.0'`。升级 Go 时要同时改 `backend/go.mod`、`backend-ci.yml`（两处）、`release.yml`、`security-scan.yml` 里的这句断言，**以及三个 Dockerfile 里的 Go 构建镜像**（`Dockerfile` / `deploy/Dockerfile` 的 `ARG GOLANG_IMAGE`、`backend/Dockerfile` 的 `FROM golang:`）。前者漏了 CI 会在版本校验步骤直接失败；**后者漏了 CI 不会报，而是等到有人用这些 Dockerfile 构建时才失败**（`go.mod requires go >= X (running Y; GOTOOLCHAIN=local)`）。
+- Go 版本必须是 **1.27.3**：workflow 使用 `go-version-file: backend/go.mod` 取版本，版本断言须同步为 `go1.27.3`。升级 Go 时要同时修改模块、CI 检查和三个 Dockerfile 的 Go 构建镜像（`Dockerfile` / `deploy/Dockerfile` 的 `ARG GOLANG_IMAGE`、`backend/Dockerfile` 的 `FROM golang:`），避免构建环境与模块要求不一致。
 - 前端使用 `pnpm install --frozen-lockfile`，必须提交 `pnpm-lock.yaml`
 
 ### 本地测试命令
@@ -72,7 +72,44 @@ cd backend && golangci-lint run ./...
 cd frontend && pnpm install
 ```
 
-### 上游同步：sub2api v0.2.13
+### 上游同步：sub2api v0.2.19 与后续主分支
+
+2026-11-03 同步至 Wei-Shaw/sub2api 提交
+`4a4a83ee5ec86b19d3a2dd9b6471de5128963bec`（2026-11-02），包含
+v0.2.18、v0.2.19 以及管理 MCP、管理员密钥权限和后续安全修复。
+本项目仍使用 `github.com/MACOS-DO/sub4api` 模块和 `1.1.11` 版本标识；
+此记录不代表已发布新镜像或部署到服务器。
+
+- 接入受限管理员 API Key、图片按实际张数计费、GPT-6.1 Terra、Grok 模型目录诊断、
+  Vertex service-account 配额及 OAuth 管理 MCP。MCP 默认关闭，显式设置
+  `MCP_PUBLIC_URL` 才启用；协议和权限见 `docs/mcp.md`、`docs/admin-api-keys.md`。
+- 同步流式断连结算、异常收尾、图片转存公网校验、上传大小限制、模型价卡及缓存用量、
+  Gemini 重试与模型声明、限流误判、分页边界和调度快照缓存等修复。
+- 保留打票及自动降智检测、BPS、请求时区/出口检测、请求审计、托管 Responses 搜索、
+  Claude UTF-16 原始消息指纹、`cch` 和会话隔离、GPT-6.1 Sol 固定描述及显式推理参数优先。
+  Codex 默认身份按上游改为 `codex_cli_rs`，本地 Windows UA 后缀与管理员指纹配置保留。
+- 保留应用自更新禁用、只读版本接口、私有发布工作流及计费队列同步兜底。
+  兼容流的部分结果只提交一次结算；可换号重试的失败不携带可计费结果。
+- 上游新增迁移按完整文件名记录，保留本地同号不同名迁移；
+  `246_enable_gemini_image_generation_groups.sql`、`247_scoped_admin_api_keys.sql`、
+  `248_group_image_count_billing.sql`、`249_mcp_oauth.sql` 不改内容或校验和。
+  更新校验清单时显式指定上述上游提交。
+- 调度快照缓存按修订号失效，本地票据投影检查仍在载入时执行。绕过正式写入接口的
+  旧版 Redis 写入，最迟在 10 秒缓存期限后可见；票据/参与策略的正常写入会推进修订号。
+- 前端使用与 CI 一致的 pnpm 9 安装锁文件。系统全局 pnpm 12 不再读取
+  `package.json` 中的 `pnpm.overrides`，本地可使用 `npx pnpm@9.15.9`。
+
+本地验证（2026-11-03）：
+
+- `go test -tags=unit ./...`、`go test -tags=integration ./...` 全部通过；
+  集成套件实际使用临时 PostgreSQL 18 和 Redis 8 容器。
+- 前端 391 个测试文件、3171 项测试通过，类型检查、ESLint 和生产构建通过。
+- golangci-lint v2.14.0 零问题；嵌入前端的服务器构建及 `internal/web` 测试通过。
+- 发布脚本 15 项测试及部署安全、网关环境、运行资源和 Caddy 配置检查通过。
+- 打票诊断工具的出站身份校验跟随统一 CLI originator，仍保留固定客户端版本、
+  票据注入及并发重放。验证使用测试上游，不代表真实账号的打票成功率验收。
+
+### 历史同步：sub2api v0.2.13
 
 同步基线：[Wei-Shaw/sub2api v0.2.13](https://github.com/Wei-Shaw/sub2api/releases/tag/v0.2.13)，
 目标提交 `3040209f205472038c1ba745a1bedd2edd9053b1`。保留本项目模块路径、
