@@ -689,6 +689,10 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		return err
 	}
 	firstClientMessage = normalizeOpenAIRequestLocale(ctx, account, firstClientMessage, "ws")
+	httpHandoffHistory := newOpenAIWSHTTPHandoffHistory(s.cfg)
+	if s.openAIWSHTTPBridgeEnabled() {
+		httpHandoffHistory.begin(firstClientMessage)
+	}
 	if isOpenAIResponsesLiteWebSocketPayload(firstClientMessage) {
 		liteFirstMessage, _, liteErr := normalizeOpenAIResponsesLitePayloadForAccount(firstClientMessage, account)
 		if liteErr != nil {
@@ -1033,6 +1037,30 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 						turnLifecycle.cancelResponseCreate()
 					}
 				}()
+				if s.openAIWSHTTPHandoffSizeReached(len(payload)) {
+					httpPayload, safe, prepareErr := httpHandoffHistory.prepare(payload)
+					if prepareErr != nil {
+						return payload, nil, prepareErr
+					}
+					if safe {
+						model := usageMeta.requestModelForFrame(payload)
+						if strings.TrimSpace(gjson.GetBytes(httpPayload, "model").String()) == "" {
+							httpPayload = s.ReplaceModelInBody(httpPayload, model)
+						}
+						return payload, nil, &openAIWSHTTPHandoff{
+							payload: httpPayload, turn: int(completedTurns.Load()) + 1,
+						}
+					}
+					logOpenAIWSV2Passthrough(
+						"relay_http_handoff_skipped account_id=%d payload_bytes=%d reason=incomplete_replay_context",
+						account.ID, len(payload),
+					)
+				}
+				if s.openAIWSHTTPBridgeEnabled() {
+					httpHandoffHistory.begin(payload)
+				}
+			} else if eventType != "response.cancel" && s.openAIWSHTTPBridgeEnabled() {
+				httpHandoffHistory.disableForSessionEvent()
 			}
 			responsesLite := isResponseCreate && isOpenAIResponsesLiteWebSocketPayload(payload)
 			if isResponseCreate {
@@ -1339,6 +1367,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				if msgType != coderws.MessageText {
 					return nil
 				}
+				if s.openAIWSHTTPBridgeEnabled() {
+					httpHandoffHistory.observe(restoreCodexToolNamesFromContext(c, payload))
+				}
 				eventType, _, _ := parseOpenAIWSEventEnvelope(payload)
 				if eventType == "response.created" {
 					failureAccountSideEffectsApplied = false
@@ -1467,6 +1498,10 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	)
 
 	relayErr := relayExit.Err
+	var handoff *openAIWSHTTPHandoff
+	if errors.As(relayErr, &handoff) {
+		return handoff
+	}
 	var firstOutputTimeoutErr *openAIWSPassthroughFirstOutputTimeoutError
 	if errors.As(relayErr, &firstOutputTimeoutErr) {
 		deadline := firstOutputTimeoutErr.deadline

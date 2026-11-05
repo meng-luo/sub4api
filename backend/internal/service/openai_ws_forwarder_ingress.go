@@ -115,6 +115,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 
 	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
+	firstTurn := 1
 	forceHTTPBridge := account.Platform == PlatformGrok ||
 		(s.pluginManager != nil && s.pluginManager.ShouldRouteOpenAIOAuth(account))
 	modeRouterV2Enabled := s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.ModeRouterV2Enabled
@@ -140,7 +141,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			// 首轮准入由握手路径完成；后续 response.create 会在写入上游前
 			// 依次回调 BeforeRequest 和 BeforeTurn，并在终止或失败时回调
 			// AfterTurn，从而覆盖 turn 级利润复核、定价冻结和并发槽位释放。
-			return s.proxyResponsesWebSocketV2Passthrough(
+			passthroughErr := s.proxyResponsesWebSocketV2Passthrough(
 				ctx,
 				c,
 				clientConn,
@@ -150,6 +151,14 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				hooks,
 				wsDecision,
 			)
+			var handoff *openAIWSHTTPHandoff
+			if !errors.As(passthroughErr, &handoff) {
+				return passthroughErr
+			}
+			firstClientMessage = handoff.payload
+			firstTurn = handoff.turn
+			c.Request.Header.Del(openAIWSTurnStateHeader)
+			forceHTTPBridge = true
 		case OpenAIWSIngressModeHTTPBridge:
 			forceHTTPBridge = true
 		case OpenAIWSIngressModeCtxPool, OpenAIWSIngressModeShared, OpenAIWSIngressModeDedicated:
@@ -548,7 +557,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		return payload, nil
 	}
 
-	firstPayload, err := parseClientPayload(1, firstClientMessage)
+	firstPayload, err := parseClientPayload(firstTurn, firstClientMessage)
 	if err != nil {
 		return err
 	}
@@ -596,32 +605,34 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 	refreshIngressRouteState(firstPayload)
 
-	if useHTTPBridge {
+	runHTTPBridge := func(bridgeFirstPayload openAIWSClientPayload, startTurn int, skipFirstAdmission bool) error {
 		logOpenAIWSModeInfo(
-			"ingress_ws_http_bridge_start account_id=%d account_type=%s payload_bytes=%d threshold_bytes=%d has_session_hash=%v store_disabled=%v",
+			"ingress_ws_http_bridge_start account_id=%d account_type=%s turn=%d payload_bytes=%d threshold_bytes=%d has_session_hash=%v store_disabled=%v",
 			account.ID,
 			account.Type,
-			firstPayload.payloadBytes,
+			startTurn,
+			bridgeFirstPayload.payloadBytes,
 			s.openAIWSHTTPBridgeThresholdBytes(),
 			sessionHash != "",
 			storeDisabled,
 		)
-		currentBridgePayload := firstPayload
+		currentBridgePayload := bridgeFirstPayload
 		// Keep the first turn as the stable conversation seed. The mapped model
 		// is resolved again for each turn below so an in-connection model switch
 		// cannot reuse another model's upstream cache identity.
-		grokCacheSeedPayload := firstPayload.payloadRaw
+		grokCacheSeedPayload := bridgeFirstPayload.payloadRaw
 		var bridgeReplayInput []json.RawMessage
 		bridgeReplayInputExists := false
 		var bridgeAccountFailoverInput []json.RawMessage
 		bridgeAccountFailoverInputExists := false
-		for turn := 1; ; turn++ {
-			if turn > 1 && hooks != nil && hooks.BeforeRequest != nil {
+		for turn := startTurn; ; turn++ {
+			admitTurn := turn != startTurn || !skipFirstAdmission
+			if admitTurn && turn > 1 && hooks != nil && hooks.BeforeRequest != nil {
 				if err := hooks.BeforeRequest(turn, currentBridgePayload.rawForHash, currentBridgePayload.originalModel); err != nil {
 					return err
 				}
 			}
-			if hooks != nil && hooks.BeforeTurn != nil {
+			if admitTurn && hooks != nil && hooks.BeforeTurn != nil {
 				if err := hooks.BeforeTurn(turn); err != nil {
 					return err
 				}
@@ -755,8 +766,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			// bridgeCurrentItems），保存历史必须经 combine 新建头，禁止就地 append。
 			bridgeReplayInput = turnReplayInput
 			bridgeReplayInputExists = turnReplayInputExists
-			if result.wsReplayInputExists {
-				bridgeReplayInput = combineOpenAIWSReplayItems(bridgeReplayInput, result.wsReplayInput)
+			if len(result.wsAccountFailoverReplayInput) > 0 {
+				bridgeReplayInput = combineOpenAIWSReplayItems(bridgeReplayInput, result.wsAccountFailoverReplayInput)
 				bridgeReplayInputExists = true
 			}
 			bridgeAccountFailoverInput = turnAccountFailoverInput
@@ -801,6 +812,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			currentBridgePayload = nextPayload
 		}
+	}
+	if useHTTPBridge {
+		return runHTTPBridge(firstPayload, firstTurn, false)
 	}
 
 	firstRoutingFields := gjson.GetManyBytes(firstPayload.payloadRaw, "model", "service_tier")
@@ -1303,6 +1317,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					result.wsReplayInput = replayInput
 					result.wsReplayInputExists = true
 				}
+				result.wsAccountFailoverReplayInput = replayCollector.AllItems()
 				if imageCount > 0 {
 					result.ImageCount = imageCount
 					result.ImageSize = imageSizeTier
@@ -1318,6 +1333,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	currentPayload := firstPayload.payloadRaw
 	// Admission hooks must see client model candidates before upstream mapping.
 	currentClientPayload := firstPayload.rawForHash
+	currentIdentitySourcePayload := firstPayload.accountIdentitySourceRaw
 	currentOriginalModel := firstPayload.originalModel
 	currentImageBillingModel := firstPayload.imageBillingModel
 	currentImageSizeTier := firstPayload.imageSizeTier
@@ -1391,6 +1407,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	var lastTurnStrictState *openAIWSIngressPreviousTurnStrictState
 	lastTurnReplayInput := []json.RawMessage(nil)
 	lastTurnReplayInputExists := false
+	httpHandoffHistory := newOpenAIWSHTTPHandoffHistory(s.cfg)
 	currentTurnReplayInput := []json.RawMessage(nil)
 	currentTurnReplayInputExists := false
 	skipBeforeTurn := false
@@ -1530,6 +1547,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if lastTurnReplayInputExists {
 				lastTurnReplayInput, _ = stripOpenAIInvalidEncryptedContentFromReplayItems(lastTurnReplayInput, invalidDigests)
 			}
+			httpHandoffHistory.stripInvalidEncryptedContent(invalidDigests)
 		}
 		boundaryPayload, contextWindowBoundary, boundaryErr := normalizeOpenAIWSContextWindowBoundary(
 			currentPayload,
@@ -1549,6 +1567,37 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				truncateOpenAIWSLogValue(lastTurnWindowID, openAIWSIDValueMaxLen),
 				truncateOpenAIWSLogValue(contextWindowBoundary.WindowID, openAIWSIDValueMaxLen),
 				contextWindowBoundary.PreviousResponseIDRemoved,
+			)
+		}
+		if s.openAIWSHTTPHandoffSizeReached(currentPayloadBytes) {
+			httpPayload, safe, prepareErr := httpHandoffHistory.prepare(currentPayload)
+			if prepareErr != nil {
+				return fmt.Errorf("prepare oversized websocket HTTP handoff: %w", prepareErr)
+			}
+			if safe {
+				// This turn has been admitted but has not reached the WS upstream.
+				// Close the old socket before sending the full context once via HTTP.
+				resetSessionLease(true)
+				useHTTPBridge = true
+				turnState = ""
+				c.Request.Header.Del(openAIWSTurnStateHeader)
+				bridgePayload := openAIWSClientPayload{
+					payloadRaw:               httpPayload,
+					accountIdentitySourceRaw: currentIdentitySourcePayload,
+					rawForHash:               currentClientPayload,
+					originalModel:            currentOriginalModel,
+					imageBillingModel:        currentImageBillingModel,
+					imageSizeTier:            currentImageSizeTier,
+					imageInputSize:           currentImageInputSize,
+					payloadBytes:             len(httpPayload),
+					requestedReasoningEffort: currentRequestedReasoningEffort,
+				}
+				refreshIngressRouteState(bridgePayload)
+				return runHTTPBridge(bridgePayload, turn, true)
+			}
+			logOpenAIWSModeInfo(
+				"ingress_ws_http_handoff_skipped account_id=%d turn=%d payload_bytes=%d reason=incomplete_replay_context",
+				account.ID, turn, currentPayloadBytes,
 			)
 		}
 		currentPreviousResponseID := openAIWSPayloadStringFromRaw(currentPayload, "previous_response_id")
@@ -1892,6 +1941,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		if result == nil {
 			return errors.New("websocket turn result is nil")
 		}
+		if s.openAIWSHTTPBridgeEnabled() {
+			httpHandoffHistory.record(currentPayload, result)
+		}
 		responseID := strings.TrimSpace(result.RequestID)
 		lastTurnResponseID = responseID
 		if contextWindowBoundary.WindowID != "" {
@@ -2018,6 +2070,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		currentPayload = nextPayload.payloadRaw
 		currentClientPayload = nextPayload.rawForHash
+		currentIdentitySourcePayload = nextPayload.accountIdentitySourceRaw
 		currentOriginalModel = nextPayload.originalModel
 		currentImageBillingModel = nextPayload.imageBillingModel
 		currentImageSizeTier = nextPayload.imageSizeTier

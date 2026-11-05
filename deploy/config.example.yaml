@@ -413,6 +413,14 @@ gateway:
     store_disabled_force_new_conn: true
     # 是否启用 WSv2 generate=false 预热（默认 false）
     prewarm_generate_enabled: false
+    # 客户端 WS 单条消息读取上限，默认 64 MiB；HTTP bridge 不绕过此限制。
+    client_read_limit_bytes: 67108864
+    # 大请求发送上游前改用 HTTP/SSE，默认开启；客户端 WS 连接保持不变。
+    # 覆盖 HTTP 入站及 WS 后续轮次。续链仅在本连接历史完整、工具上下文可补全时切换。
+    # 切换后该客户端连接持续使用 HTTP bridge，不重新执行已完成的轮次。
+    http_bridge_enabled: true
+    # 按 JSON payload 字节数判断，默认 15 MiB（包含内嵌图片及已有对话历史）。
+    http_bridge_threshold_bytes: 15728640
     # 协议 feature 开关，v2 优先于 v1
     responses_websockets: false
     responses_websockets_v2: true

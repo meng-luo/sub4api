@@ -109,6 +109,24 @@ cd frontend && pnpm install
 - 部署安全、网关环境、运行资源及 Caddy 配置检查通过。
   验证未调用真实上游账号，也未运行生产数据库迁移。
 
+### 多轮大图请求的 HTTP 分流
+
+- `gateway.openai_ws.http_bridge_enabled` 默认开启，阈值
+  `http_bridge_threshold_bytes` 默认 15 MiB，按 JSON 请求体字节数判断。
+  HTTP 入站拟转 OpenAI WS 时先检查大小；未知 `previous_response_id`
+  不直接删除，仍保留原有续链路径。
+- WS `ctx_pool` / `passthrough` 在后续 `response.create` 发送上游前也检查大小。
+  本连接已确认的续链可补全输入、助手回答及工具调用后切到 HTTP/SSE；
+  已完成的轮次不重新执行，当前轮准入和计费钩子不重复调用。切换后该客户端
+  WS 连接保持 HTTP bridge，及时关闭原上游 WS。
+- 补全历史只存在于当前连接内，保留上限为客户端消息读取上限与 64 MiB 的较小值，
+  最多 16384 项。未知续链、未配对工具结果、未解析的 item reference、
+  passthrough 的额外 session/conversation 状态及 `generate=false` 预热不强制切换。
+- 日志 `ingress_ws_http_bridge_start` 包含切换轮次和体积；
+  `forward_large_request_http` 表示 HTTP 入站大请求直接使用 HTTP；
+  `*_http_handoff_skipped` 表示本轮无法安全补全上下文。
+  回归使用本地模拟上游，不能据此认定生产 502 已消失；源码修改须重新构建部署后生效。
+
 ### 历史同步：sub2api v0.2.19 与后续主分支
 
 2026-11-03 同步至 Wei-Shaw/sub2api 提交

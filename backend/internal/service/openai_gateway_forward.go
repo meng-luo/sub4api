@@ -141,6 +141,17 @@ func (s *OpenAIGatewayService) forwardWithoutHostedWebSearch(ctx context.Context
 		// The compact endpoint is unary HTTP, not a WS response.create turn.
 		wsDecision = openAIWSHTTPDecision("compact_http")
 	}
+	if wsDecision.Transport == OpenAIUpstreamTransportResponsesWebsocketV2 &&
+		s.shouldBridgeOpenAIWSHTTP(account, len(body), gjson.GetBytes(body, "previous_response_id").String()) {
+		coverage := AnalyzeToolCallOutputContextCoverageBytes(body)
+		if !coverage.HasFunctionCallOutput || coverage.ContextCoversAllCallIDs {
+			wsDecision = openAIWSHTTPDecision("request_body_above_ws_threshold")
+			logOpenAIWSModeInfo(
+				"forward_large_request_http account_id=%d payload_bytes=%d threshold_bytes=%d",
+				account.ID, len(body), s.openAIWSHTTPBridgeThresholdBytes(),
+			)
+		}
+	}
 	legacyCompactWire := compactPath && !isOpenAINativeCompactionV2(c)
 	if shouldFlattenOpenAIResponsesNamespaces(account, wsDecision.Transport, passthroughEnabled, compactPath) {
 		body, err = flattenOpenAIResponsesNamespaces(c, body)
