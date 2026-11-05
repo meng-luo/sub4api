@@ -18,7 +18,13 @@ func directImagesTestAccount() *Account {
 }
 
 func TestCodexDirectImagesRouting(t *testing.T) {
-	for _, model := range []string{"gpt-image-1.5", "gpt-image-2", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "gpt-image-2.5-flare-2026-09-08", "gpt-image-2.5-sunburst-2026-09-08"} {
+	for _, model := range []string{
+		"gpt-image-1.5", "gpt-image-2",
+		"gpt-image-2.5-flare", "gpt-image-2.5-sunburst",
+		"gpt-image-2.5-flare-2026-09-08", "gpt-image-2.5-sunburst-2026-09-08",
+		"gpt-image-2.6-flare", "gpt-image-2.6-sunburst",
+		"gpt-image-2.6-flare-2026-11-04", "gpt-image-2.6-sunburst-2026-11-04",
+	} {
 		t.Run(model, func(t *testing.T) {
 			body := []byte(fmt.Sprintf(`{"model":%q,"prompt":"  原样保留 prompt  ","quality":"max","size":"auto","response_format":"url","extra":{"preserve":true}}`, model))
 			c, rec := newOpenAIImagesTestContext(t, body)
@@ -44,7 +50,7 @@ func TestCodexDirectImagesRouting(t *testing.T) {
 			require.Equal(t, model, gjson.GetBytes(upstream.lastBody, "model").String())
 			require.Equal(t, "  原样保留 prompt  ", gjson.GetBytes(upstream.lastBody, "prompt").String())
 			require.False(t, gjson.GetBytes(upstream.lastBody, "extra").Exists())
-			for _, key := range []string{"tools", "reasoning", "instructions", "response_format", "stream"} {
+			for _, key := range []string{"tools", "reasoning", "instructions", "response_format", "stream", "complexity"} {
 				require.False(t, gjson.GetBytes(upstream.lastBody, key).Exists(), key)
 			}
 			require.Equal(t, "data:image/png;base64,aGVsbG8=", gjson.GetBytes(rec.Body.Bytes(), "data.0.url").String())
@@ -71,7 +77,7 @@ func TestCodexDirectImagesMappingBeforeRouting(t *testing.T) {
 			require.Equal(t, "gpt-image-2.5-flare", gjson.GetBytes(upstream.lastBody, "model").String())
 		})
 	}
-	for _, model := range []string{"gpt-image-1", "gpt-image-future"} {
+	for _, model := range []string{"gpt-image-1", "gpt-image-future", "gpt-image-2.6-flare-2099-01-01"} {
 		body, target, err := buildOpenAIImagesOAuthPayload(&OpenAIImagesRequest{Prompt: "draw"}, model)
 		require.NoError(t, err)
 		require.Equal(t, chatgptCodexURL, target)

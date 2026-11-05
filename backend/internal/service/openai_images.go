@@ -86,6 +86,7 @@ type OpenAIImagesRequest struct {
 	SizeTier           string
 	ResponseFormat     string
 	Quality            string
+	Complexity         string
 	Background         string
 	OutputFormat       string
 	Moderation         string
@@ -274,6 +275,16 @@ func parseOpenAIImagesJSONRequest(body []byte, req *OpenAIImagesRequest) error {
 	}
 	req.ResponseFormat = strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "response_format").String()))
 	req.Quality = strings.TrimSpace(gjson.GetBytes(body, "quality").String())
+	if complexity := gjson.GetBytes(body, "complexity"); complexity.Exists() {
+		if complexity.Type != gjson.String {
+			return fmt.Errorf("invalid complexity field type")
+		}
+		value, err := parseOpenAIImagesComplexity(complexity.String())
+		if err != nil {
+			return err
+		}
+		req.Complexity = value
+	}
 	req.Background = strings.TrimSpace(gjson.GetBytes(body, "background").String())
 	req.OutputFormat = strings.TrimSpace(gjson.GetBytes(body, "output_format").String())
 	req.Moderation = strings.TrimSpace(gjson.GetBytes(body, "moderation").String())
@@ -420,6 +431,13 @@ func parseOpenAIImagesMultipartRequest(body []byte, contentType string, req *Ope
 		case "quality":
 			req.Quality = value
 			req.HasNativeOptions = true
+		case "complexity":
+			complexity, err := parseOpenAIImagesComplexity(value)
+			if err != nil {
+				return err
+			}
+			req.Complexity = complexity
+			req.HasNativeOptions = true
 		case "background":
 			req.Background = value
 			req.HasNativeOptions = true
@@ -464,6 +482,16 @@ func parseOpenAIImagesMultipartRequest(body []byte, contentType string, req *Ope
 
 func parseOpenAIImageDimensions(_ textproto.MIMEHeader) (int, int) {
 	return 0, 0
+}
+
+func parseOpenAIImagesComplexity(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	switch value {
+	case "low", "medium", "high":
+		return value, nil
+	default:
+		return "", fmt.Errorf("complexity must be low, medium, or high")
+	}
 }
 
 func applyOpenAIImagesDefaults(req *OpenAIImagesRequest) {
@@ -574,6 +602,7 @@ func hasOpenAINativeImageOptions(exists func(path string) bool) bool {
 	for _, path := range []string{
 		"background",
 		"quality",
+		"complexity",
 		"style",
 		"output_format",
 		"output_compression",
@@ -590,7 +619,7 @@ func hasOpenAINativeImageOptions(exists func(path string) bool) bool {
 
 func isOpenAINativeImageOption(name string) bool {
 	switch strings.TrimSpace(strings.ToLower(name)) {
-	case "background", "quality", "style", "output_format", "output_compression", "moderation", "input_fidelity", "partial_images":
+	case "background", "quality", "complexity", "style", "output_format", "output_compression", "moderation", "input_fidelity", "partial_images":
 		return true
 	default:
 		return false

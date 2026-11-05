@@ -54,9 +54,16 @@ func TestCodexDirectImagesMultipartEdit(t *testing.T) {
 
 func TestCodexDirectImagesPricingAndUsage(t *testing.T) {
 	prices := &PricingService{pricingData: map[string]*LiteLLMModelPricing{"gpt-image-2": {InputCostPerToken: 1}}}
-	for _, model := range []string{"gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "gpt-image-2.5-flare-2026-09-08", "gpt-image-2.5-sunburst-2026-09-08"} {
+	for _, model := range []string{
+		"gpt-image-2.5-flare", "gpt-image-2.5-sunburst",
+		"gpt-image-2.5-flare-2026-09-08", "gpt-image-2.5-sunburst-2026-09-08",
+		"gpt-image-2.6-flare", "gpt-image-2.6-sunburst",
+		"gpt-image-2.6-flare-2026-11-04", "gpt-image-2.6-sunburst-2026-11-04",
+	} {
 		price := prices.matchOpenAIModel(model)
+		require.NotNil(t, price, model)
 		require.Equal(t, 5e-6, price.InputCostPerToken)
+		require.Equal(t, 1.25e-6, price.CacheReadInputTokenCost)
 		require.Equal(t, 8e-6, price.InputCostPerImageToken)
 		require.Equal(t, 30e-6, price.OutputCostPerImageToken)
 		require.Equal(t, 2e-6, price.CacheReadInputImageTokenCost)
@@ -66,6 +73,21 @@ func TestCodexDirectImagesPricingAndUsage(t *testing.T) {
 	var catalog map[string]LiteLLMModelPricing
 	require.NoError(t, json.Unmarshal(body, &catalog))
 	require.Equal(t, 2e-6, catalog["gpt-image-2.5-flare"].CacheReadInputImageTokenCost)
+	for _, model := range []string{
+		"gpt-image-2.6-flare", "gpt-image-2.6-sunburst",
+		"gpt-image-2.6-flare-2026-11-04", "gpt-image-2.6-sunburst-2026-11-04",
+	} {
+		price, ok := catalog[model]
+		require.True(t, ok, model)
+		require.Equal(t, 5e-6, price.InputCostPerToken)
+		require.Equal(t, 1.25e-6, price.CacheReadInputTokenCost)
+		require.Equal(t, 8e-6, price.InputCostPerImageToken)
+		require.Equal(t, 2e-6, price.CacheReadInputImageTokenCost)
+		require.Equal(t, 30e-6, price.OutputCostPerImageToken)
+		custom := &LiteLLMModelPricing{InputCostPerToken: 7e-6}
+		prices.pricingData[model] = custom
+		require.Same(t, custom, prices.GetModelPricing(model), "explicit pricing must win")
+	}
 	usage, ok := codexDirectImagesUsage([]byte(`{"usage":{"input_tokens":100,"input_tokens_details":{"text_tokens":20,"image_tokens":80,"cached_tokens":50,"cached_tokens_details":{"text_tokens":10,"image_tokens":40}},"output_tokens":200}}`))
 	require.True(t, ok)
 	require.Equal(t, 40, usage.ImageCacheReadTokens)
