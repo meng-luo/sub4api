@@ -332,12 +332,18 @@ func TestOpenAIWSHTTPHandoffFailureDoesNotReplayCompletedTurn(t *testing.T) {
 	require.NoError(t, err)
 	payload := []byte(`{"type":"response.create","model":"gpt-5.1","input":"second request ` + strings.Repeat("x", 8192) + `"}`)
 	require.NoError(t, client.Write(ctx, coderws.MessageText, payload))
+	_, failure, readErr := client.Read(ctx)
+	require.NoError(t, readErr)
+	require.Equal(t, "error", gjson.GetBytes(failure, "type").String())
+	require.Equal(t, int64(http.StatusBadGateway), gjson.GetBytes(failure, "status").Int())
 	select {
 	case err := <-serverErr:
-		require.Error(t, err)
-		retry, safe := OpenAIWSCurrentTurnRetryPayload(err)
-		require.True(t, safe)
-		require.Equal(t, gjson.GetBytes(payload, "input").String(), gjson.GetBytes(retry, "input.0").String())
+		require.ErrorContains(t, err, "upstream http bridge request failed")
+		// A later-turn transport failure has an ambiguous upstream outcome.
+		// Report it to the client without authorizing an automatic replay.
+		retry, retryable := OpenAIWSCurrentTurnRetryPayload(err)
+		require.False(t, retryable)
+		require.Empty(t, retry)
 	case <-ctx.Done():
 		t.Fatal("HTTP handoff failure did not finish")
 	}
@@ -345,6 +351,7 @@ func TestOpenAIWSHTTPHandoffFailureDoesNotReplayCompletedTurn(t *testing.T) {
 	require.NoError(t, turnErrors[0])
 	require.Error(t, turnErrors[1])
 	require.Len(t, httpUpstream.requests, 1)
+	require.NotContains(t, string(httpUpstream.lastBody), "first request")
 	require.Len(t, staged.writes, 1)
 }
 
