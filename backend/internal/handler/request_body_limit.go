@@ -7,7 +7,19 @@ import (
 
 	"github.com/MACOS-DO/sub4api/internal/config"
 	pkghttputil "github.com/MACOS-DO/sub4api/internal/pkg/httputil"
+	middleware2 "github.com/MACOS-DO/sub4api/internal/server/middleware"
+	"github.com/gin-gonic/gin"
 )
+
+// handleRequestBodyReadError handles cancellation and temporary capacity errors
+// before callers classify malformed or oversized request bodies.
+func handleRequestBodyReadError(c *gin.Context, err error) bool {
+	if err != nil && failoverClientGone(c) {
+		c.Abort()
+		return true
+	}
+	return middleware2.RejectRequestBodyMemoryOverload(c, err)
+}
 
 func extractMaxBytesError(err error) (*http.MaxBytesError, bool) {
 	var maxErr *http.MaxBytesError

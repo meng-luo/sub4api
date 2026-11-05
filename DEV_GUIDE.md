@@ -72,7 +72,44 @@ cd backend && golangci-lint run ./...
 cd frontend && pnpm install
 ```
 
-### 上游同步：sub2api v0.2.19 与后续主分支
+### 上游同步：sub2api 2026-11-05 主分支
+
+2026-11-05 从 Wei-Shaw/sub2api 拉取并同步至
+`8e92c892b47f3f934f18ce63da4c4dcb75f0b6bd`（2026-11-05 09:34:43 +0800）。
+本轮增量基线为上次同步的 `4a4a83ee5ec86b19d3a2dd9b6471de5128963bec`，
+新增 24 个提交。`sub2api` 远端指向 Wei-Shaw/sub2api；原有 `upstream`
+远端仍指向 MACOS-DO/sub4api。合并提交记录当前上游为第二父提交，后续可直接
+用 `git merge-base HEAD sub2api/main` 识别已同步基线。
+
+- 接入 OpenAI 图片 1K/2K/4K 尺寸档位分流及溢出选号的会话粘性处理；
+  接入注册邮箱精确黑名单、命中用户查询与批量禁用，禁用时同步吊销 MCP 授权。
+- 同步 Kimi 并发限制 403 的短冷却、Grok delegated message 输入、
+  Antigravity 系统身份处理、用量 CSV 分页与 429 等待重试、
+  OpenAI 空 instructions 透传及原始值回显；跟进 CC Switch 默认导出模型。
+- 同步共享请求体内存预算、上传读取与下游写入超时、SSE 行/事件/队列上限、
+  客户端断开后的有限计费读取、通知工作池和有界会话缓存。
+  配置默认值与示例保持一致；边界规则见 `docs/agent-resource-safety.md`。
+- 13 个冲突文件逐项处理：保留 mandatory 计费队列同步兜底及单次结算、
+  Codex zstd 压缩与 Responses Lite、自动降智检测、请求时区配置与请求审计。
+  打票、BPS、托管搜索、Claude 指纹、Sol 描述与显式推理优先、
+  自更新禁用、本地版本/品牌/发布工作流继续保留。
+- 本轮无新增 SQL 迁移；300 项上游迁移校验值不变，仅更新清单的基线提交。
+  本地模块与 `1.1.11` 版本保持不变，本次源码合并不代表已发布或部署。
+
+本地验证（2026-11-05）：
+
+- 后端全量 unit、integration 通过；仓储集成测试实际使用临时 PostgreSQL 18.1
+  和 Redis 8.4。请求体、读写超时、计费 drain、会话缓存、通知和 usage 边界的
+  定向 `-race` 检查通过；Wire 重新生成，嵌入前端服务器构建及 web 测试通过。
+- 流式累积与摘要会话查询完成尺寸扩展 benchmark。`B/op` 为累计分配量：
+  Anthropic text 累积 32/128/512 KiB 时约 270 KB/974 KB/4.37 MB，
+  摘要查询 100/1000/5000 消息约 1.8/16/82 KB；未测驻留堆或 RSS。
+- golangci-lint v2.14.0 零问题。前端 395 个测试文件、3197 项测试通过，
+  类型检查、ESLint、生产构建通过；CC Switch 默认模型测试跟随上游更新。
+- 部署安全、网关环境、运行资源及 Caddy 配置检查通过。
+  验证未调用真实上游账号，也未运行生产数据库迁移。
+
+### 历史同步：sub2api v0.2.19 与后续主分支
 
 2026-11-03 同步至 Wei-Shaw/sub2api 提交
 `4a4a83ee5ec86b19d3a2dd9b6471de5128963bec`（2026-11-02），包含
