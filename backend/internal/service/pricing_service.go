@@ -38,7 +38,7 @@ var (
 	// cache_creation_input_token_cost_above_1hr_above_200k_tokens 等）。
 	// 组 1 为基础价字段名主干，组 2 为 1h 缓存时长段（可为空），组 3 为服务档后缀（可为空）。
 	cacheTierPricePattern = regexp.MustCompile(`^(cache_(?:creation|read)_input_token_cost)(_above_1hr)?_above_\d+k_tokens((?:_[a-z]+)?)$`)
-	// Official GPT Image 2.5 token rates (2026-09-08):
+	// Official GPT Image 2.5 / 2.6 token rates (verified 2026-11-06):
 	// https://developers.openai.com/api/docs/pricing#image-generation-models
 	openAIGPTImage25FallbackPricing = &LiteLLMModelPricing{
 		InputCostPerToken:       5e-06,

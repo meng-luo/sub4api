@@ -415,7 +415,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		mappedUpstreamModel := account.GetMappedModel(requestModel)
 		upstreamModel := normalizeOpenAIModelForUpstream(account, mappedUpstreamModel)
-		if err := validateGPT61SolCompatRequest(trimmed, upstreamModel, mappedUpstreamModel); err != nil {
+		if err := validateGPT61CompatRequest(trimmed, upstreamModel, mappedUpstreamModel); err != nil {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, err.Error(), err)
 		}
 		if openai.IsGPT61SolModelSpelling(upstreamModel) && reasoningBeforeCompatibility.Exists() && gjson.GetBytes(normalized, "reasoning").Raw != reasoningBeforeCompatibility.Raw {

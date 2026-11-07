@@ -23,9 +23,16 @@ func TestDefaultModelsIncludeGPT6Astra(t *testing.T) {
 	require.Equal(t, "GPT-6 Astra", displayName)
 }
 
-func TestDefaultModelsIncludeGPTImage25(t *testing.T) {
+func TestDefaultModelsPreferConcreteGPT56SolForAccountTests(t *testing.T) {
+	require.NotEmpty(t, DefaultModels)
+	require.Equal(t, "gpt-5.6-sol", DefaultModels[0].ID)
+}
+
+func TestDefaultModelsIncludeGPTImage25And26(t *testing.T) {
 	require.Contains(t, DefaultModelIDs(), "gpt-image-2.5-flare")
 	require.Contains(t, DefaultModelIDs(), "gpt-image-2.5-sunburst")
+	require.Contains(t, DefaultModelIDs(), "gpt-image-2.6-flare")
+	require.Contains(t, DefaultModelIDs(), "gpt-image-2.6-sunburst")
 }
 
 func TestDefaultModelsIncludeGPTImage26(t *testing.T) {

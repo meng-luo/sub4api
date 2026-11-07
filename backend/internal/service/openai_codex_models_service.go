@@ -443,8 +443,21 @@ var configuredCodexGPT61SolDescriptor = func() configuredCodexModelDescriptor {
 	return descriptor
 }()
 
+var configuredCodexGPT61TerraDescriptor = func() configuredCodexModelDescriptor {
+	descriptor := configuredCodexModelDescriptor{EffectiveContextWindowPercent: 95}
+	if err := json.Unmarshal(openai.CodexGPT61TerraMetadata, &descriptor); err != nil {
+		panic(err)
+	}
+	return descriptor
+}()
+
 func newConfiguredCodexModelDescriptor(modelID string) configuredCodexModelDescriptor {
 	modelID = strings.TrimSpace(modelID)
+	if openai.IsGPT61TerraModelSpelling(modelID) {
+		descriptor := configuredCodexGPT61TerraDescriptor
+		descriptor.Slug = modelID
+		return descriptor
+	}
 	if openai.IsGPT61SolModelSpelling(modelID) {
 		descriptor := configuredCodexGPT61SolDescriptor
 		descriptor.Slug = modelID
@@ -665,9 +678,6 @@ func configuredCodexGPTReasoningLevels(modelID string) []configuredCodexReasonin
 			Effort:      "ultra",
 			Description: "Maximum reasoning with automatic task delegation",
 		})
-	}
-	if openai.IsGPT61TerraModelSpelling(modelID) {
-		levels = append([]configuredCodexReasoningLevel{{Effort: "none", Description: "No reasoning"}}, levels...)
 	}
 	return levels
 }
@@ -2126,6 +2136,7 @@ func CodexModelsManifestETag(body []byte) string {
 }
 
 var apiKeyCodexModelsWithoutResponsesLite = map[string]struct{}{
+	"gpt-6.1-terra": {},
 	"gpt-6.1-sol":   {},
 	"gpt-6-astra":   {},
 	"gpt-5.6-sol":   {},
