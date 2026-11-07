@@ -37,6 +37,7 @@ func TestOpenAIWSIngressEndedByClient_BareNormalClosureIsNotAccountFailure(t *te
 	require.Equal(t, coderws.StatusNormalClosure, coderws.CloseStatus(err))
 
 	require.True(t, openAIWSIngressEndedByClient(err))
+	require.False(t, shouldReportOpenAIWSProxyAccountFailure(err))
 }
 
 // 同一形状被包一层（例如 ingress 把 read 错误裹进上下文）时也必须认得。
@@ -45,6 +46,7 @@ func TestOpenAIWSIngressEndedByClient_WrappedBareNormalClosureIsNotAccountFailur
 		coderws.CloseError{Code: coderws.StatusNormalClosure, Reason: "client done"})
 
 	require.True(t, openAIWSIngressEndedByClient(err))
+	require.False(t, shouldReportOpenAIWSProxyAccountFailure(err))
 }
 
 // 缺陷主复现之二：客户端中途断开。ReadOpenAIWSClientMessage 在 controlCtx.Done()
@@ -61,6 +63,7 @@ func TestOpenAIWSIngressEndedByClient_ClientCancelDuringTurnIsNotAccountFailure(
 	require.NotEqual(t, coderws.StatusNormalClosure, closeErr.StatusCode())
 
 	require.True(t, openAIWSIngressEndedByClient(err))
+	require.False(t, shouldReportOpenAIWSProxyAccountFailure(err))
 }
 
 // 既有行为不得回退：网关自己用 1000 收尾（inter-turn idle timeout 就是这条）
@@ -70,6 +73,7 @@ func TestOpenAIWSIngressEndedByClient_GatewayNormalClosureStillRecognised(t *tes
 		coderws.StatusNormalClosure, "websocket idle timeout", context.DeadlineExceeded)
 
 	require.True(t, openAIWSIngressEndedByClient(err))
+	require.False(t, shouldReportOpenAIWSProxyAccountFailure(err))
 }
 
 // 收窄证明：1001 本身不足以豁免。网关也会因自身原因用 GoingAway 收场，
@@ -143,6 +147,7 @@ func TestOpenAIWSIngressEndedByClient_MatchesCloseCodeReportedInLog(t *testing.T
 			if closeStatus == "1000(StatusNormalClosure)" {
 				require.True(t, openAIWSIngressEndedByClient(err),
 					"日志按 1000 归类为正常关闭，归因侧不得同时判为账号故障")
+				require.False(t, shouldReportOpenAIWSProxyAccountFailure(err))
 			}
 		})
 	}

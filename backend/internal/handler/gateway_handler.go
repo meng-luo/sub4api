@@ -732,6 +732,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				}
 			}
 			account := selection.Account
+			// Selection already registered the session, including wait-plan paths.
+			// Track it before interception or slot acquisition can return early.
+			sessionSlotAccounts[account.ID] = account
 			setOpsSelectedAccount(c, account.ID, account.Platform)
 
 			// [DEBUG-STICKY] 打印账号选择结果
@@ -833,7 +836,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			}
 			account = latest
 			selection.Account = latest
-			// 记录本请求注册过会话槽的账号（profit 准入后账号已定）
+			// 保留利润终检后的最新账号快照。
 			sessionSlotAccounts[account.ID] = account
 			// 等待路径保持既有 eager 绑定（无门时 helper 直接绑定）；调度器已
 			// 抢槽的直达路径无门时由选号内部绑定，这里只在门下补准入后绑定。
@@ -928,6 +931,12 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				result, err = h.antigravityGatewayService.Forward(requestCtx, c, account, attemptBody, hasBoundSession)
 			} else {
 				result, err = h.gatewayService.Forward(requestCtx, c, account, attemptParsedReq)
+			}
+			// Release unsuccessful sessions before retry backoff or error handling.
+			// Partial results retain the existing metered-session lifetime.
+			if err != nil && result == nil {
+				h.gatewayService.ReleaseAccountSession(context.Background(), account, sessionKey)
+				delete(sessionSlotAccounts, account.ID)
 			}
 
 			// 兜底释放串行锁（正常情况已通过回调提前释放）
@@ -1072,9 +1081,6 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					action := fs.HandleFailoverError(c.Request.Context(), h.gatewayService, account.ID, account.Platform, account.GetPoolModeRetryCount(), failoverErr)
 					switch action {
 					case FailoverContinue:
-						// 本次尝试已确定性失败，立即释放该账号的会话注册
-						h.gatewayService.ReleaseAccountSession(context.Background(), account, sessionKey)
-						delete(sessionSlotAccounts, account.ID)
 						continue
 					case FailoverExhausted:
 						h.handleFailoverExhausted(c, fs.LastFailoverErr, account.Platform, streamStarted)
