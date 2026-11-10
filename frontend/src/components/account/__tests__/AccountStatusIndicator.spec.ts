@@ -51,6 +51,28 @@ function makeAccount(overrides: Partial<Account>): Account {
 }
 
 describe('AccountStatusIndicator', () => {
+  it('shows a short rate-limit badge for Fable 5.2', () => {
+    const wrapper = mount(AccountStatusIndicator, {
+      props: {
+        account: makeAccount({
+          platform: 'anthropic',
+          extra: {
+            model_rate_limits: {
+              'claude-fable-5-2': {
+                rate_limited_at: '2026-11-10T00:00:00Z',
+                rate_limit_reset_at: '2099-11-10T00:00:00Z'
+              }
+            }
+          }
+        })
+      },
+      global: { stubs: { Icon: true } }
+    })
+    expect(wrapper.text()).toContain('CFable52')
+    expect(wrapper.text()).not.toContain('claude-fable-5-2')
+    wrapper.unmount()
+  })
+
   it('shows the predicted model only for an active automatic degradation block', async () => {
     const account = makeAccount({
       platform: 'openai',

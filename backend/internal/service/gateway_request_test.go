@@ -388,7 +388,7 @@ func TestFilterThinkingBlocksForRetry_DisablesThinkingAndPreservesAsText(t *test
 
 func TestClaude55FilterThinkingBlocksRemovesSignedChainAfterInvalidBlock(t *testing.T) {
 	input := []byte(`{"model":"claude-sonnet-5-5","messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"old","signature":""},{"type":"text","text":"answer"}]},{"role":"assistant","content":[{"type":"thinking","thinking":"later","signature":"valid"},{"type":"redacted_thinking","data":"encrypted"},{"type":"text","text":"later answer"}]},{"role":"assistant","content":[{"type":"thinking","thinking":"only thought","signature":"valid"}]}]}`)
-	for _, model := range []string{"claude-sonnet-5-5", "claude-opus-5-5"} {
+	for _, model := range []string{"claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-2"} {
 		t.Run(model, func(t *testing.T) {
 			out := FilterThinkingBlocks(input, model)
 			require.False(t, gjson.GetBytes(out, "messages.0.content.#(type==thinking)").Exists())

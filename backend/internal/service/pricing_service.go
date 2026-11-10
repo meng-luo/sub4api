@@ -142,6 +142,16 @@ var (
 		Mode:                                "chat",
 		SupportsPromptCaching:               true,
 	}
+	claudeFable52FallbackPricing = &LiteLLMModelPricing{
+		InputCostPerToken:                   8e-6,
+		OutputCostPerToken:                  40e-6,
+		CacheCreationInputTokenCost:         10e-6,
+		CacheCreationInputTokenCostAbove1hr: 16e-6,
+		CacheReadInputTokenCost:             0.2e-6,
+		LiteLLMProvider:                     "anthropic",
+		Mode:                                "chat",
+		SupportsPromptCaching:               true,
+	}
 	claudeOpus55FallbackPricing = &LiteLLMModelPricing{
 		InputCostPerToken: 4e-6, OutputCostPerToken: 20e-6,
 		CacheCreationInputTokenCost: 5e-6, CacheCreationInputTokenCostAbove1hr: 8e-6,
@@ -1451,6 +1461,12 @@ func (s *PricingService) extractBaseName(model string) string {
 // matchByModelFamily 基于模型系列匹配
 func (s *PricingService) matchByModelFamily(model string) *LiteLLMModelPricing {
 	model = normalizeAntigravityClaudeTierAlias(model)
+	if claude.IsFable52(model) {
+		if pricing, ok := s.pricingData["claude-fable-5-2"]; ok {
+			return pricing
+		}
+		return claudeFable52FallbackPricing
+	}
 	if claude.IsOpus55(model) {
 		if pricing, ok := s.pricingData["claude-opus-5-5"]; ok {
 			return pricing
