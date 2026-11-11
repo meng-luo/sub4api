@@ -778,7 +778,10 @@ describe('UseKeyModal', () => {
     expect(models['claude-sonnet-5-5'].variants).not.toHaveProperty('none')
   })
 
-  it('exports Fable 5.2 with adaptive thinking and all supported effort levels', async () => {
+  it.each([
+    ['claude-fable-5-2', 'Claude Fable 5.2'],
+    ['claude-mythos-5-2', 'Claude Mythos 5.2']
+  ])('exports %s on Anthropic with adaptive thinking and all supported effort levels', async (model, name) => {
     const wrapper = mount(UseKeyModal, {
       props: { show: true, apiKey: 'sk-test', baseUrl: 'https://example.com/v1', platform: 'anthropic' },
       global: { stubs: { BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' }, Icon: { template: '<span />' } } }
@@ -787,8 +790,8 @@ describe('UseKeyModal', () => {
     expect(tab).toBeDefined()
     await tab!.trigger('click')
     await nextTick()
-    const config = JSON.parse(wrapper.find('pre code').text()).provider.anthropic.models['claude-fable-5-2']
-    expect(config.name).toBe('Claude Fable 5.2')
+    const config = JSON.parse(wrapper.find('pre code').text()).provider.anthropic.models[model]
+    expect(config.name).toBe(name)
     expect(config.limit).toEqual({ context: 1000000, output: 128000 })
     expect(config.modalities).toEqual({ input: ['text', 'image', 'pdf'], output: ['text'] })
     expect(config.options).toEqual({ thinking: { type: 'adaptive' }, effort: 'high' })
@@ -836,6 +839,7 @@ describe('UseKeyModal', () => {
     expect(claudeConfig).toBeDefined()
     const parsed = JSON.parse(claudeConfig!)
     expect(parsed.provider['antigravity-claude'].models).not.toHaveProperty('claude-fable-5-2')
+    expect(parsed.provider['antigravity-claude'].models).not.toHaveProperty('claude-mythos-5-2')
     const fable51 = parsed.provider['antigravity-claude'].models['claude-fable-5-1']
     const fable = parsed.provider['antigravity-claude'].models['claude-fable-5']
 

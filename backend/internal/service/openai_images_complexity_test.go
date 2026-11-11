@@ -102,7 +102,11 @@ func TestOpenAIImageOnlyTransformPreservesComplexity(t *testing.T) {
 			}
 			require.True(t, normalizeOpenAIResponsesImageOnlyModel(req))
 			require.NotContains(t, req, "complexity")
-			tool := req["tools"].([]any)[0].(map[string]any)
+			tools, ok := req["tools"].([]any)
+			require.True(t, ok)
+			require.Len(t, tools, 1)
+			tool, ok := tools[0].(map[string]any)
+			require.True(t, ok)
 			require.Equal(t, "gpt-image-2.6-sunburst", tool["model"])
 			require.Equal(t, want, tool["complexity"])
 			require.False(t, normalizeOpenAIResponsesImageOnlyModel(req))

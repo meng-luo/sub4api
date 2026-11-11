@@ -2355,7 +2355,7 @@ func TestOpenAIWSHTTPBridge_IdleTimeoutClosesClientSession(t *testing.T) {
 
 func TestProxyOpenAIWSHTTPBridgeTurn_StagesCodexFingerprint(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	run := func(account *Account) *http.Request {
+	run := func(account *Account) (*http.Request, []byte) {
 		sse := `data: {"type":"response.completed","response":{"id":"resp_fp","model":"gpt-5.5","status":"completed","usage":{"input_tokens":1,"output_tokens":1}}}` + "\n\n"
 		upstream := &httpUpstreamRecorder{resp: &http.Response{
 			StatusCode: http.StatusOK,
@@ -2376,18 +2376,23 @@ func TestProxyOpenAIWSHTTPBridgeTurn_StagesCodexFingerprint(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.NotNil(t, upstream.lastReq)
-		return upstream.lastReq
+		return upstream.lastReq, upstream.lastBody
 	}
 
 	full := newTestOAuthAccount(7101, map[string]any{"codex_fingerprint_mode": "full"})
 	ids := resolveCodexFingerprintIDsFromRequest(full, nil)
 	require.NotNil(t, ids)
-	first := run(full)
-	require.Equal(t, ids.sessionID, first.Header.Get("session_id"))
-	require.Equal(t, ids.installationID, first.Header.Get("x-codex-installation-id"))
-	// Every bridge request carries the same account-level session_id, keeping upstream cache routing stable
-	require.Equal(t, first.Header.Get("session_id"), run(full).Header.Get("session_id"))
+	first, firstBody := run(full)
+	require.Equal(t, ids.sessionID, first.Header.Get("session-id"))
+	require.Empty(t, first.Header.Get("session_id"))
+	require.Empty(t, first.Header.Get("x-codex-installation-id"))
+	require.Equal(t, ids.installationID, gjson.GetBytes(firstBody, "client_metadata.x-codex-installation-id").String())
+	// The bridge stages metadata while preserving final HTTP header projection.
+	second, _ := run(full)
+	require.Equal(t, first.Header.Get("session-id"), second.Header.Get("session-id"))
 
 	off := newTestOAuthAccount(7102, map[string]any{"codex_fingerprint_mode": "off"})
-	require.Empty(t, run(off).Header.Get("session_id"), "accounts without convergence get no session_id")
+	offReq, offBody := run(off)
+	require.Empty(t, offReq.Header.Get("session_id"))
+	require.NotEqual(t, ids.installationID, gjson.GetBytes(offBody, "client_metadata.x-codex-installation-id").String())
 }

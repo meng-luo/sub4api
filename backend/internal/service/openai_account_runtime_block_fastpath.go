@@ -101,6 +101,23 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 		scheduleOllamaCloudUsageActivity(s.deferredService, account)
 		scheduleOpenCodeGoUsageActivity(s.deferredService, account)
 	}
+	// Capacity shedding describes this request, not account health. Keep the
+	// account schedulable while the request-local retry budget handles recovery.
+	if account != nil && account.Platform == PlatformOpenAI && isOpenAIRequestScopedCapacityShed("", responseBody) {
+		// A model-scoped rule (including legacy rules with a known model) overrides
+		// the default retry policy without blocking the whole account.
+		model := firstRequestedModel(canonicalModel)
+		if s != nil && s.rateLimitService != nil && model != "" && account.IsTempUnschedulableEnabled() {
+			ruleBody := openAICapacityShedRuleBody(responseBody)
+			matches := matchTempUnschedulableRules(account, statusCode, ruleBody)
+			if len(matches) > 0 && tempUnschedRuleUsesModelScope(matches[0].rule, model, statusCode) {
+				stateCtx, cancel := openAIAccountStateContext(ctx)
+				defer cancel()
+				return s.rateLimitService.HandleTempUnschedulable(stateCtx, account, statusCode, ruleBody, model)
+			}
+		}
+		return false
+	}
 	stateCtx, cancel := openAIAccountStateContext(ctx)
 	defer cancel()
 	if account != nil && account.Platform == PlatformOpenAI && isOpenAIHTTPUpstreamAccessStateError(statusCode, "", responseBody) {

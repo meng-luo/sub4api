@@ -125,7 +125,7 @@ func TestGatewayMessagesReleasesUnservedSession(t *testing.T) {
 				}
 			}
 			c, _ := gin.CreateTestContext(writer)
-			body := `{"model":"claude-sonnet-4-5","max_tokens":256,"messages":[{"role":"user","content":"` + prompt + `"}]}`
+			body := `{"model":"claude-sonnet-4-5","max_tokens":256,"messages":[{"role":"user","content":[{"type":"text","text":"` + prompt + `"}]}]}`
 			ctx = context.WithValue(ctx, ctxkey.Group, group)
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewBufferString(body)).WithContext(ctx)
 			c.Request.Header.Set("Content-Type", "application/json")

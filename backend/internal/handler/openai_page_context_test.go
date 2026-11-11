@@ -133,7 +133,9 @@ func TestNormalizeCodexPageContextMixedBootstrap(t *testing.T) {
 		{"type": "function_call_output", "namespace": "codex_app", "name": "create_thread", "output": delegationEnvelope},
 		{"type": "function_call_output", "namespace": "codex_app", "name": "automation_update", "output": "<heartbeat><automation_id>test</automation_id></heartbeat>"},
 	} {
-		t.Run(item["name"].(string), func(t *testing.T) {
+		name, ok := item["name"].(string)
+		require.True(t, ok)
+		t.Run(name, func(t *testing.T) {
 			body := pageContextRequest(t, pageContextItem("codex_apps_open_page", `{"page_id":null}`), item)
 			got, changed := normalizeCodexPageContext(body)
 			require.True(t, changed)

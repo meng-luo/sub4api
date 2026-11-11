@@ -17,8 +17,8 @@ func ResponsesToAnthropicRequest(req *ResponsesRequest) (*AnthropicRequest, erro
 	isOpus55 := claude.IsOpus55(req.Model)
 	isSonnet55 := claude.IsSonnet55(req.Model)
 	isHaiku55 := claude.IsHaiku55(req.Model)
-	isFable52 := claude.IsFable52(req.Model)
-	isAdaptiveModel := isOpus55 || isSonnet55 || isHaiku55 || isFable52
+	isFableOrMythos52 := claude.IsFable52(req.Model) || claude.IsMythos52(req.Model)
+	isAdaptiveModel := isOpus55 || isSonnet55 || isHaiku55 || isFableOrMythos52
 	system, messages, err := convertResponsesInputToAnthropic(req.Instructions, req.Input, isAdaptiveModel)
 	if err != nil {
 		return nil, err
@@ -59,9 +59,9 @@ func ResponsesToAnthropicRequest(req *ResponsesRequest) (*AnthropicRequest, erro
 		out.ToolChoice = tc
 	}
 
-	// The 5.5 models and Fable 5.2 reject manual thinking.
-	// Fable 5.2 and Opus/Sonnet 5.5 additionally reject forced tool use;
-	// Haiku 5.5 accepts it (starts with the tool call, no thinking
+	// The 5.5 models and Fable/Mythos 5.2 reject manual thinking.
+	// Fable/Mythos 5.2 and Opus/Sonnet 5.5 additionally reject
+	// forced tool use; Haiku 5.5 accepts it (starts with the tool call, no thinking
 	// block). Sonnet 5.5 supports between_tools to disable up-front thinking;
 	// Haiku 5.5 uses disabled (at high effort or below) instead.
 	// Resolve the upstream model before conversion: client aliases need not
@@ -79,7 +79,7 @@ func ResponsesToAnthropicRequest(req *ResponsesRequest) (*AnthropicRequest, erro
 			return nil, fmt.Errorf("%s does not support forced tool_choice; use auto or none", req.Model)
 		}
 		effort := "medium"
-		if isSonnet55 || isFable52 {
+		if isSonnet55 || isFableOrMythos52 {
 			effort = "high"
 		}
 		if isSonnet55 {
@@ -90,7 +90,7 @@ func ResponsesToAnthropicRequest(req *ResponsesRequest) (*AnthropicRequest, erro
 				return nil, fmt.Errorf("claude-sonnet-5-5 does not support non-default top_p")
 			}
 		}
-		if isHaiku55 || isFable52 {
+		if isHaiku55 || isFableOrMythos52 {
 			if req.Temperature != nil && *req.Temperature != 1 {
 				return nil, fmt.Errorf("%s does not support non-default temperature", req.Model)
 			}

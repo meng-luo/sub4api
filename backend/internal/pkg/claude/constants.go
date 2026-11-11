@@ -162,6 +162,12 @@ var DefaultModels = []Model{
 		CreatedAt:   "2026-11-09T00:00:00Z",
 	},
 	{
+		ID:          "claude-mythos-5-2",
+		Type:        "model",
+		DisplayName: "Claude Mythos 5.2",
+		CreatedAt:   "2026-11-09T00:00:00Z",
+	},
+	{
 		ID:          "claude-fable-5-1",
 		Type:        "model",
 		DisplayName: "Claude Fable 5.1",

@@ -521,7 +521,7 @@ func newConfiguredCodexModelDescriptor(modelID string) configuredCodexModelDescr
 	}
 
 	if isClaudeCodexModel(modelID) {
-		if claude.IsOpus55(modelID) || claude.IsSonnet55(modelID) || claude.IsHaiku55(modelID) || claude.IsFable52(modelID) {
+		if claude.IsOpus55(modelID) || claude.IsSonnet55(modelID) || claude.IsHaiku55(modelID) || claude.IsFable52(modelID) || claude.IsMythos52(modelID) {
 			descriptor.ContextWindow = 1_000_000
 			descriptor.MaxContextWindow = 1_000_000
 		}
@@ -530,7 +530,7 @@ func newConfiguredCodexModelDescriptor(modelID string) configuredCodexModelDescr
 		descriptor.SupportsParallelToolCalls = true
 		if levels := configuredCodexClaudeReasoningLevels(modelID); len(levels) > 0 {
 			defaultReasoningLevel := claudeCodexDefaultReasoningLevel(levels)
-			if claude.IsSonnet55(modelID) || claude.IsFable52(modelID) {
+			if claude.IsSonnet55(modelID) || claude.IsFable52(modelID) || claude.IsMythos52(modelID) {
 				defaultReasoningLevel = "high"
 			}
 			descriptor.DefaultReasoningLevel = &defaultReasoningLevel

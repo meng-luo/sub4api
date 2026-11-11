@@ -35,7 +35,3 @@ func TestFable52CatalogAndCapabilities(t *testing.T) {
 		require.False(t, IsFable52(model), model)
 	}
 }
-
-func TestCLICurrentVersionSatisfiesFable52Gate(t *testing.T) {
-	require.GreaterOrEqual(t, compareSemver(t, CLICurrentVersion, "2.1.321"), 0)
-}

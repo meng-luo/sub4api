@@ -173,7 +173,7 @@ func TestOpenAIGatewayService_ForwardAsAnthropic_CapacityShedReturnsRequestScope
 	require.ErrorAs(t, err, &failoverErr)
 	require.Equal(t, http.StatusBadRequest, failoverErr.StatusCode)
 	require.True(t, failoverErr.ShouldRetryNextAccount())
-	require.True(t, failoverErr.RetryableOnSameAccount)
+	require.False(t, failoverErr.RetryableOnSameAccount, "a model cooldown must stop same-account replay")
 	require.True(t, failoverErr.RequestScopedTransient)
 	// 容量降载不再早退：命中账号配置的 temp_unschedulable 规则后必须写模型级冷却。
 	require.Equal(t, int64(5099), repo.modelRateLimitAccountID, "configured temp-unschedulable rule must fire for capacity shed")

@@ -2753,9 +2753,21 @@ func supportsOpenAIReasoningEffortMax(model string) bool {
 	}
 }
 
-// validateGPT61CompatRequest runs after model mapping, before conversion can
-// discard unsupported explicit effort selections or disabled thinking.
+// validateGPT61CompatRequest validates explicit effort before conversion and the
+// final effort after policy mapping. Mapped aliases retain their local validation.
 func validateGPT61CompatRequest(body []byte, model string, mappedModels ...string) error {
+	if err := validateGPT61RawEffort(body, model, mappedModels...); err != nil {
+		return err
+	}
+	if strings.EqualFold(strings.TrimSpace(gjson.GetBytes(body, "thinking.type").String()), "disabled") {
+		return openai.ValidateGPT61ReasoningEffort(model, "none")
+	}
+	return nil
+}
+
+// validateGPT61RawEffort checks explicit fields and model suffixes before a
+// Messages request synthesizes its final effort from thinking and group policy.
+func validateGPT61RawEffort(body []byte, model string, mappedModels ...string) error {
 	if !openai.IsGPT61SolModelSpelling(model) && !openai.IsGPT61TerraModelSpelling(model) {
 		return nil
 	}
@@ -2763,9 +2775,6 @@ func validateGPT61CompatRequest(body []byte, model string, mappedModels ...strin
 		if err := openai.ValidateGPT61ReasoningEffort(model, gjson.GetBytes(body, path).String()); err != nil {
 			return err
 		}
-	}
-	if strings.EqualFold(strings.TrimSpace(gjson.GetBytes(body, "thinking.type").String()), "disabled") {
-		return openai.ValidateGPT61ReasoningEffort(model, "none")
 	}
 	for _, candidate := range []string{model, gjson.GetBytes(body, "model").String()} {
 		if err := openai.ValidateGPT61ReasoningEffort(model, deriveOpenAIReasoningEffortFromModel(candidate)); err != nil {
