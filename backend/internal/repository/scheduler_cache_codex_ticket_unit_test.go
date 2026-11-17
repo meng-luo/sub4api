@@ -62,8 +62,8 @@ func TestSchedulerCacheCodexTicketProjectionAndLegacyRebuild(t *testing.T) {
 		raw, err := json.Marshal(legacy)
 		require.NoError(t, err)
 		require.NoError(t, cache.rdb.Set(ctx, schedulerAccountMetaKey("991"), raw, 0).Err())
-		// Legacy writers do not advance revisions; their data becomes visible at the cache age limit.
-		now = now.Add(schedulerSnapshotCacheMaxAge)
+		// Legacy writers do not advance revisions; their data becomes visible by the age plus stale-grace limit.
+		now = now.Add(schedulerSnapshotCacheMaxAge + schedulerSnapshotCacheStaleGrace)
 		_, hit, err = cache.GetSnapshot(ctx, bucket)
 		require.NoError(t, err)
 		require.False(t, hit, "old metadata must cause DB fallback and republish")

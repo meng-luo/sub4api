@@ -521,6 +521,7 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 		resetKeepaliveTimer()
 		return true
 	}
+	clientModel := compositeClientModel(ctx, "")
 	processCompleteEvent := func(lines []string) {
 		event := parseAnthropicSSEEvent(lines)
 		if event.hasData {
@@ -534,6 +535,12 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 				firstTokenMs = &ms
 			}
 			parseSSEUsagePassthrough(event.data, usage)
+		}
+		if clientModel != "" && gjson.Get(event.data, "type").String() == "message_start" && gjson.Get(event.data, "message.model").Exists() {
+			if rewritten, err := sjson.Set(event.data, "message.model", clientModel); err == nil {
+				_ = writeBlock(event.blockWithData(rewritten))
+				return
+			}
 		}
 		_ = writeBlock(event.rawBlock())
 	}
@@ -688,8 +695,8 @@ func (event anthropicSSEEvent) rawBlock() string {
 }
 
 // blockWithData preserves comments and all non-data SSE fields when a JSON
-// payload must be rewritten. Multiple data lines are replaced by one data
-// field containing their protocol-defined newline-joined value.
+// payload must be rewritten. Each payload line gets its own data field so
+// preserved JSON formatting cannot turn a continuation into an SSE field.
 func (event anthropicSSEEvent) blockWithData(data string) string {
 	lines := make([]string, 0, len(event.lines)+1)
 	replaced := false
@@ -697,7 +704,9 @@ func (event anthropicSSEEvent) blockWithData(data string) string {
 		field, _, ok := parseAnthropicSSELine(line)
 		if ok && field == "data" {
 			if !replaced {
-				lines = append(lines, "data: "+data)
+				for _, dataLine := range strings.Split(data, "\n") {
+					lines = append(lines, "data: "+dataLine)
+				}
 				replaced = true
 			}
 			continue
@@ -705,7 +714,9 @@ func (event anthropicSSEEvent) blockWithData(data string) string {
 		lines = append(lines, line)
 	}
 	if !replaced {
-		lines = append(lines, "data: "+data)
+		for _, dataLine := range strings.Split(data, "\n") {
+			lines = append(lines, "data: "+dataLine)
+		}
 	}
 	return strings.Join(lines, "\n") + "\n\n"
 }
@@ -981,6 +992,7 @@ func (s *GatewayService) handleNonStreamingResponseAnthropicAPIKeyPassthrough(
 	if contentType == "" {
 		contentType = "application/json"
 	}
+	body = restoreCompositeClientModel(ctx, body)
 	body = reverseToolNamesIfPresent(c, body)
 	c.Data(resp.StatusCode, contentType, body)
 	return usage, nil

@@ -53,7 +53,7 @@ npm install -g pnpm
 
 ### CI 要求
 
-- Go 版本必须是 **1.27.3**：workflow 使用 `go-version-file: backend/go.mod` 取版本，版本断言须同步为 `go1.27.3`。升级 Go 时要同时修改模块、CI 检查和三个 Dockerfile 的 Go 构建镜像（`Dockerfile` / `deploy/Dockerfile` 的 `ARG GOLANG_IMAGE`、`backend/Dockerfile` 的 `FROM golang:`），避免构建环境与模块要求不一致。
+- Go 版本必须是 **1.27.4**：workflow 使用 `go-version-file: backend/go.mod` 取版本，版本断言须同步为 `go1.27.4`。升级 Go 时要同时修改模块、CI 检查和三个 Dockerfile 的 Go 构建镜像（`Dockerfile` / `deploy/Dockerfile` 的 `ARG GOLANG_IMAGE`、`backend/Dockerfile` 的 `FROM golang:`），避免构建环境与模块要求不一致。
 - 前端使用 `pnpm install --frozen-lockfile`，必须提交 `pnpm-lock.yaml`
 
 ### 本地测试命令
@@ -71,6 +71,43 @@ cd backend && golangci-lint run ./...
 # 前端依赖安装（必须用 pnpm）
 cd frontend && pnpm install
 ```
+
+### 双上游同步：sub4api 与 sub2api v0.2.22（2026-11-17）
+
+同步 MACOS-DO/sub4api `abb254065`（2 个新提交）及 Wei-Shaw/sub2api
+`15871f904`（从 `530c5e3a4` 新增 186 个提交，包含 v0.2.22）。
+本地模块、`1.1.11` 版本、品牌及发布流程保持不变，Go 工具链与三个 Dockerfile、
+CI 断言同步升级到 1.27.4。MACOS-DO 的代理配置文档和素材已合入。
+
+- 接入分组强制 Ultra Fast、Gemini 4 Carbon/Hydrogen、Vertex 多区域端点，
+  以及额度刷新、Fable 限流恢复、模型过滤、工具 Schema、流式异常和首输出处理修复。
+- Codex 页面上下文规范化扩展为附加不可信上下文，保留本地校验顺序回归；
+  保留分叉会话的父级 prompt cache、additional_tools 声明 ID、Lite/compact、
+  大请求 HTTP handoff、打票、自动降智、BPS、请求审计和托管搜索功能。
+- 调度快照按 bucket 合并加载并复用未变化的账号，同时保留票据投影完整性校验、
+  BPS 工作区/过期时间字段及模型能力投影。无修订号的旧写入可见上界改为
+  10 秒直接复用 + 20 秒后台刷新宽限期（另加加载耗时）；正常写入仍推进修订号。
+- 接入按用户合并计费事务，软删除 API Key 的在途请求继续累计额度和速率用量，
+  但不恢复状态、不报告新额度耗尽；新增批量结算与重试幂等的真实数据库回归。
+  托管搜索逐轮账号成本适配新增上游端点倍率参数。
+- Claude 并发 token 轮换恢复与本地响应控制头观察并存，避免重复发送请求；
+  SSE 快路径保留多行 data、注释和 id 字段，复合模型只重写 message_start，
+  增强两种认证路径的字段保留回归；改写后的每行 JSON 均带 data 前缀，
+  避免格式化 JSON 的换行破坏 SSE。计费指纹继续使用原始用户正文。
+- 新增两个完整文件名不同的 `251_*.sql` 迁移，保留本地同号迁移；
+  304 个上游 SQL 文件逐字节保持一致，并更新上游校验清单。
+
+本地验证（2026-11-17）：
+
+- 后端全量 `go test -tags=unit ./...`、`go test -tags=integration ./...` 通过，
+  仓储集成实际使用临时 PostgreSQL / Redis；软删除 Key 批量计费回归通过。
+- 调度缓存及票据投影定向 `-race` 通过；Ent/Wire 重新生成，
+  golangci-lint v2.14.0 零问题，嵌入前端服务器构建及 web 测试通过。
+- pnpm 9.15.9：前端 397 个测试文件 / 3254 项测试通过；ESLint、类型检查、
+  生产构建通过（仍有大 chunk 提示）。
+- 发布脚本、Apple container 生命周期、Compose 安全/网关环境/资源与 Caddy
+  配置检查通过；304 个上游迁移逐字节一致。
+- 验证未调用真实上游账号，未运行生产数据库迁移，未发布或部署。
 
 ### 上游同步：sub2api v0.2.21 与后续主分支（2026-11-11）
 

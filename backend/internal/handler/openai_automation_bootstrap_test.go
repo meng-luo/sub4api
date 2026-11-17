@@ -222,7 +222,7 @@ func TestNormalizeCodexBootstrapPrecheck(t *testing.T) {
 	for name, normalize := range map[string]func([]byte) ([]byte, bool){
 		"automation": normalizeCodexAutomationBootstrap,
 		"delegation": normalizeCodexDelegationBootstrap,
-		"page":       normalizeCodexPageContext,
+		"page":       normalizeCodexUntrustedContext,
 	} {
 		t.Run(name, func(t *testing.T) {
 			allocs := testing.AllocsPerRun(10, func() {

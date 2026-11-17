@@ -69,12 +69,17 @@ func syncBillingHeaderVersion(body []byte, userAgent string, c *gin.Context) []b
 	}
 	fingerprint := computeClaudeCodeFingerprintFromText(firstText, version)
 	replacement := "cc_version=" + version
+	// The fingerprint depends only on the original messages and version, so it
+	// is the same for every billing block. Compute it lazily, at most once.
+	fingerprintedReplacement := ""
 	idx := 0
 	systemResult.ForEach(func(_, item gjson.Result) bool {
 		text := item.Get("text")
 		if text.Exists() && text.Type == gjson.String &&
 			strings.HasPrefix(text.String(), "x-anthropic-billing-header") {
-			fingerprintedReplacement := replacement + "." + fingerprint
+			if fingerprintedReplacement == "" {
+				fingerprintedReplacement = replacement + "." + fingerprint
+			}
 			newText := ccVersionWithFingerprintInBillingRe.ReplaceAllString(text.String(), fingerprintedReplacement)
 			newText = ccVersionInBillingRe.ReplaceAllString(newText, replacement)
 			if newText != text.String() {

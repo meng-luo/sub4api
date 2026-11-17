@@ -65,7 +65,7 @@ func TestCodexProbeGatewayAccountAndFingerprintRewritesStayConsistent(t *testing
 			var decoded map[string]any
 			require.NoError(t, json.Unmarshal(body, &decoded))
 			// Exercise the same identity stages and order used by Forward.
-			require.True(t, applyCodexAccountIdentityClientMetadataMap(decoded, account, 77))
+			require.True(t, applyCodexAccountIdentityClientMetadataMap(decoded, account, 77, ""))
 			ids := resolveCodexFingerprintIDsFromRequest(account, headers)
 			applyCodexFingerprintClientMetadata(decoded, ids)
 			stageCodexFingerprintIDs(c, ids)
