@@ -170,7 +170,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}
-	if openai.IsGPT61SolModelSpelling(upstreamModel) && chatReq.ReasoningEffort == "" {
+	if (openai.IsGPT61SolModelSpelling(upstreamModel) || openai.GPT62ModelID(upstreamModel) != "") && chatReq.ReasoningEffort == "" {
 		chatReq.ReasoningEffort = deriveOpenAIReasoningEffortFromModelCandidates([]string{originalModel, billingModel})
 	}
 

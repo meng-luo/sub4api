@@ -72,6 +72,19 @@ cd backend && golangci-lint run ./...
 cd frontend && pnpm install
 ```
 
+### 上游同步：sub2api v0.2.23（2026-11-18）
+
+同步 Wei-Shaw/sub2api `2af3f1e15`，从 `15871f904` 新增 32 个提交。
+保留本地 `1.1.11` 版本及模块路径。
+
+- 接入 GPT-6.2 Sol/Astra 的模型目录、套餐档位和价格，保留本地 GPT-6.1
+  价表和映射后的推理参数校验。Ultra Fast 支持渠道自定义倍率。
+- 接入 Anthropic 缓存创建 TTL 的用量归集和计费修正；透传保持原有 SSE
+  分隔符和多行数据。OpenAI 流式空闲只在首个模型输出前允许切换账号，
+  并计入已有的首输出切换预算。
+- 新增 `252_channel_pricing_ultrafast_multiplier.sql`，305 个上游 SQL
+  文件逐字节保持一致，校验清单基线更新至 `2af3f1e15`。
+
 ### 双上游同步：sub4api 与 sub2api v0.2.22（2026-11-17）
 
 同步 MACOS-DO/sub4api `abb254065`（2 个新提交）及 Wei-Shaw/sub2api

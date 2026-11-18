@@ -367,6 +367,7 @@ type configuredCodexModelMessages struct {
 	PersistentInstructions json.RawMessage `json:"persistent_instructions,omitempty"`
 	Tools                  json.RawMessage `json:"tools,omitempty"`
 	ConfirmationPolicies   json.RawMessage `json:"confirmation_policies,omitempty"`
+	Apps                   json.RawMessage `json:"apps,omitempty"`
 }
 
 // configuredCodexModelDescriptor is the minimum complete ModelInfo contract
@@ -425,6 +426,11 @@ type configuredCodexModelDescriptor struct {
 	SupportsExperimentalContext       json.RawMessage                 `json:"supports_experimental_context,omitempty"`
 	SupportsReasoningSummaries        json.RawMessage                 `json:"supports_reasoning_summaries,omitempty"`
 	SupportsReasoningEffortUpdates    json.RawMessage                 `json:"supports_reasoning_effort_updates,omitempty"`
+	BaseInstructions                  string                          `json:"base_instructions,omitempty"`
+	MultiAgentToolsInCodeMode         json.RawMessage                 `json:"multi_agent_tools_in_code_mode,omitempty"`
+	AllowOnlyCodexCloudOrchestrator   json.RawMessage                 `json:"allow_only_codex_cloud_agent_orchestrator,omitempty"`
+	AllowOnlyChatGPTWorkspaceExecutor json.RawMessage                 `json:"allow_only_chatgpt_workspace_executor,omitempty"`
+	AvailableAccessPrograms           json.RawMessage                 `json:"available_access_programs,omitempty"`
 }
 
 type codexModelMetadataOverride struct {
@@ -435,24 +441,33 @@ type codexModelMetadataOverride struct {
 
 // Parse the embedded descriptor once. Callers replace capability slices/pointers,
 // never mutate their shared contents, so copying the descriptor is sufficient.
-var configuredCodexGPT61SolDescriptor = func() configuredCodexModelDescriptor {
+func parseConfiguredCodexModelDescriptor(metadata []byte) configuredCodexModelDescriptor {
 	descriptor := configuredCodexModelDescriptor{EffectiveContextWindowPercent: 95}
-	if err := json.Unmarshal(openai.CodexGPT61SolMetadata, &descriptor); err != nil {
+	if err := json.Unmarshal(metadata, &descriptor); err != nil {
 		panic(err)
 	}
 	return descriptor
-}()
+}
 
-var configuredCodexGPT61TerraDescriptor = func() configuredCodexModelDescriptor {
-	descriptor := configuredCodexModelDescriptor{EffectiveContextWindowPercent: 95}
-	if err := json.Unmarshal(openai.CodexGPT61TerraMetadata, &descriptor); err != nil {
-		panic(err)
-	}
-	return descriptor
-}()
+var (
+	configuredCodexGPT61SolDescriptor   = parseConfiguredCodexModelDescriptor(openai.CodexGPT61SolMetadata)
+	configuredCodexGPT61TerraDescriptor = parseConfiguredCodexModelDescriptor(openai.CodexGPT61TerraMetadata)
+	configuredCodexGPT62SolDescriptor   = parseConfiguredCodexModelDescriptor(openai.CodexGPT62SolMetadata)
+	configuredCodexGPT62AstraDescriptor = parseConfiguredCodexModelDescriptor(openai.CodexGPT62AstraMetadata)
+)
 
 func newConfiguredCodexModelDescriptor(modelID string) configuredCodexModelDescriptor {
 	modelID = strings.TrimSpace(modelID)
+	switch openai.GPT62ModelID(modelID) {
+	case "gpt-6.2-sol":
+		descriptor := configuredCodexGPT62SolDescriptor
+		descriptor.Slug = modelID
+		return descriptor
+	case "gpt-6.2-astra":
+		descriptor := configuredCodexGPT62AstraDescriptor
+		descriptor.Slug = modelID
+		return descriptor
+	}
 	if openai.IsGPT61TerraModelSpelling(modelID) {
 		descriptor := configuredCodexGPT61TerraDescriptor
 		descriptor.Slug = modelID
@@ -463,6 +478,7 @@ func newConfiguredCodexModelDescriptor(modelID string) configuredCodexModelDescr
 		descriptor.Slug = modelID
 		// Explicit upstream metadata still overrides this generated default.
 		descriptor.ContextWindow = 500_000
+		descriptor.Priority = 3
 		return descriptor
 	}
 	noReasoningLevel := "none"
@@ -2136,6 +2152,8 @@ func CodexModelsManifestETag(body []byte) string {
 }
 
 var apiKeyCodexModelsWithoutResponsesLite = map[string]struct{}{
+	"gpt-6.2-sol":   {},
+	"gpt-6.2-astra": {},
 	"gpt-6.1-terra": {},
 	"gpt-6.1-sol":   {},
 	"gpt-6-astra":   {},
