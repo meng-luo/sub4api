@@ -66,7 +66,9 @@ ENV GOPROXY=${GOPROXY}
 ENV GOSUMDB=${GOSUMDB}
 
 # Install build dependencies
-RUN apk add --no-cache git ca-certificates tzdata
+# bash/python3/zip/py3-cryptography 供 pluginimpl 的打包脚本生成 .s2plugin
+# （清单哈希 + 可选 Ed25519 签名）。仅构建阶段需要，不进最终镜像。
+RUN apk add --no-cache git ca-certificates tzdata bash python3 zip py3-cryptography
 
 WORKDIR /app/backend
 
@@ -96,6 +98,31 @@ RUN --mount=type=cache,id=sub2api-gomod,target=/go/pkg/mod \
     -trimpath \
     -o /app/sub2api \
     ./cmd/server
+
+# Build the self-hosted OpenAI transport plugin package (.s2plugin) for the same
+# target arch, so the image ships an installable artifact instead of requiring a
+# manual build on the deploy host.
+# 签名是可选步骤：--build-arg PLUGIN_SIGN=1 且 --secret id=plugin_signing_key,src=<ed25519 私钥>
+# 时产出可直接在 plugins.trusted_publishers 下安装的包；默认（PLUGIN_SIGN=0）为未签名包，
+# 只能配合 plugins.allow_unsigned 在调试环境安装。
+# sign.py 依赖 python-cryptography（构建阶段已装，最终镜像不含 python）。
+#
+# PLUGIN_SIGN 必须显式置 1 才会签名：BuildKit 的 secret 内容不参与层缓存键，
+# 只挂 secret 而重建时可能命中「未签名」的旧层而静默给出未签名包。把开关写进
+# 命令行让缓存键随签名意图变化；置 1 却拿不到私钥时直接失败，不静默降级。
+ARG PLUGIN_VERSION=0.1.0
+ARG PLUGIN_SIGN=0
+RUN --mount=type=secret,id=plugin_signing_key,required=false \
+    --mount=type=cache,id=sub2api-gomod,target=/go/pkg/mod \
+    --mount=type=cache,id=sub2api-gobuild,target=/root/.cache/go-build \
+    if [ "${PLUGIN_SIGN}" = "1" ]; then \
+        if [ ! -s /run/secrets/plugin_signing_key ]; then \
+            echo "PLUGIN_SIGN=1 但未提供 build secret plugin_signing_key" >&2; exit 1; \
+        fi; \
+        export SIGN_KEY=/run/secrets/plugin_signing_key; \
+    fi; \
+    VERSION="${PLUGIN_VERSION}" OUT=/app/plugin-dist \
+    bash ./pluginimpl/openaitransport/package/build.sh "linux-${TARGETARCH:-$(go env GOARCH)}"
 
 # -----------------------------------------------------------------------------
 # Stage 3: PostgreSQL Client (version-matched with docker-compose)
@@ -141,6 +168,10 @@ WORKDIR /app
 # Copy binary/resources with ownership to avoid extra full-layer chown copy
 COPY --from=backend-builder --chown=sub2api:sub2api /app/sub2api /app/sub2api
 COPY --from=backend-builder --chown=sub2api:sub2api /app/backend/resources /app/resources
+
+# 插件包产物（.s2plugin + 解包目录）。安装：管理页 → 插件 → 上传，
+# 或用 docker cp 从容器取出。签名包需 --build-arg PLUGIN_SIGN=1 + build secret。
+COPY --from=backend-builder --chown=sub2api:sub2api /app/plugin-dist/ /app/plugin-packages/
 
 # Create data directory
 RUN mkdir -p /app/data && chown sub2api:sub2api /app /app/data

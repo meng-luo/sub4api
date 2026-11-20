@@ -14,7 +14,7 @@ BACKEND="$(cd "${HERE}/../../.." && pwd)"
 VERSION="${VERSION:-0.1.0}"
 PLUGIN_ID="local.sub4api.openai-transport"
 NAME="Sub4API OpenAI Transport"
-OUT="${HERE}/dist"
+OUT="${OUT:-${HERE}/dist}"
 WORK="${OUT}/stage"
 
 targets=("$@")
@@ -27,6 +27,17 @@ if [ ${#targets[@]} -eq 0 ]; then
     *) echo "未知平台，请显式传入目标，例如 darwin-arm64" >&2; exit 1 ;;
   esac
 fi
+
+hash_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
+command -v zip >/dev/null 2>&1 || { echo "缺少 zip 命令，无法打包" >&2; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo "缺少 python3，无法生成清单" >&2; exit 1; }
 
 rm -rf "${WORK}"
 mkdir -p "${WORK}/runtimes" "${WORK}/ui"
@@ -43,14 +54,14 @@ for t in "${targets[@]}"; do
   echo "==> building ${t}"
   ( cd "${BACKEND}" && GOOS="${os}" GOARCH="${arch}" CGO_ENABLED=0 \
       go build -trimpath -ldflags "-s -w" -o "${WORK}/${rel}" ./cmd/openai-transport-plugin )
-  hash=$(shasum -a 256 "${WORK}/${rel}" | awk '{print $1}')
+  hash=$(hash_sha256 "${WORK}/${rel}")
   runtimes_json+=$([ -z "${runtimes_json}" ] && echo "" || echo ",")
   runtimes_json+="\"${t}\":{\"path\":\"${rel}\"}"
   files_json+=$([ -z "${files_json}" ] && echo "" || echo ",")
   files_json+="\"${rel}\":\"${hash}\""
 done
 
-ui_hash=$(shasum -a 256 "${WORK}/ui/index.html" | awk '{print $1}')
+ui_hash=$(hash_sha256 "${WORK}/ui/index.html")
 files_json+=",\"ui/index.html\":\"${ui_hash}\""
 
 manifest="${WORK}/manifest.json"

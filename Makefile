@@ -1,4 +1,4 @@
-.PHONY: build build-backend build-frontend test test-backend test-frontend test-frontend-critical
+.PHONY: build build-backend build-frontend build-plugin plugin-package plugin-package-all test test-backend test-frontend test-frontend-critical
 
 FRONTEND_CRITICAL_VITEST := \
 	src/i18n/__tests__/localeKeyCompleteness.spec.ts \
@@ -43,6 +43,16 @@ build-backend:
 # 编译前端（需要已安装依赖）
 build-frontend:
 	@pnpm --dir frontend run build
+
+# 编译 OpenAI OAuth 出站插件包（.s2plugin，当前平台）
+plugin-package: build-plugin
+
+build-plugin:
+	@backend/pluginimpl/openaitransport/package/build.sh
+
+# 多架构插件包（darwin/linux × amd64/arm64）；SIGN_KEY 存在时同时签名
+plugin-package-all:
+	@backend/pluginimpl/openaitransport/package/build.sh darwin-arm64 darwin-amd64 linux-amd64 linux-arm64
 
 # 运行测试（后端 + 前端）
 test: test-backend test-frontend

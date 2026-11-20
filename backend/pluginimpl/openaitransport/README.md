@@ -77,6 +77,35 @@ SIGN_KEY=~/.sub4api/plugin-signing.key ./build.sh   # 构建 + 签名
 
 离线校验包（不需要装到宿主）：`python3 s2plugin_verify.py <包> --key <key_id>=<公钥>`。
 
+### 4.1 从仓库根构建 / 镜像内置包
+
+```bash
+make plugin-package        # 当前平台 → backend/pluginimpl/openaitransport/package/dist/
+make plugin-package-all    # darwin-arm64 darwin-amd64 linux-amd64 linux-arm64
+```
+
+镜像（`Dockerfile`）在 backend 构建阶段顺带出包，按目标架构打 `linux-<arch>`，
+产物落在镜像内 `/app/plugin-packages/`：
+
+```bash
+# 未签名包（只能用 plugins.allow_unsigned=true 安装，适合调试）
+docker build -t sub2api:dev .
+
+# 已签名包：私钥作为 build secret 传入，并且必须显式 PLUGIN_SIGN=1
+# （secret 内容不参与层缓存键，不显式开启会命中未签名旧层）
+docker build --build-arg PLUGIN_SIGN=1 \
+  --secret id=plugin_signing_key,src="$HOME/.sub4api/plugin-signing.key" -t sub2api:prod .
+
+# 取出镜像内的包后按上面 1~3 步上传
+docker create --name sub2api-pkg sub2api:prod && \
+  docker cp sub2api-pkg:/app/plugin-packages/sub4api-openai-transport-0.1.0.s2plugin . && \
+  docker rm sub2api-pkg
+```
+
+`PLUGIN_VERSION` 可用 `--build-arg` 覆盖；`build.sh` 的 `OUT` 环境变量可改产物目录
+（镜像里指向 `/app/plugin-dist`），脚本在 Linux 容器内用 `sha256sum`、在 macOS 用
+`shasum`，两条路径都能出包。
+
 ## 5. 验收标准
 
 ```bash

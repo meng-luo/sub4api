@@ -107,11 +107,16 @@ jobs:
         if: steps.current.outputs.publish == 'true'
         id: image
         uses: docker/build-push-action@v6
+        env:
+          # 插件包签名私钥；未配置时为空 → 镜像内为未签名包，构建不失败。
+          PLUGIN_SIGNING_KEY: ${{ secrets.PLUGIN_SIGNING_KEY }}
         with:
           context: .
           file: Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
+          secrets: |
+            plugin_signing_key=PLUGIN_SIGNING_KEY
           tags: |
             ${{ steps.meta.outputs.ghcr }}:${{ steps.meta.outputs.version }}
             ${{ steps.meta.outputs.ghcr }}:latest
@@ -119,6 +124,7 @@ jobs:
             VERSION=${{ steps.meta.outputs.version }}
             COMMIT=${{ steps.meta.outputs.commit }}
             DATE=${{ steps.meta.outputs.date }}
+            PLUGIN_SIGN=${{ secrets.PLUGIN_SIGNING_KEY != '' && '1' || '0' }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.version=${{ steps.meta.outputs.version }}

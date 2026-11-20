@@ -199,7 +199,27 @@ SUB2API_TEST_PLUGIN_PACKAGE=plugins/my-openai-plugin/dist/my-openai-plugin.s2plu
 
 安装后先保持停用，确认清单兼容性、签名和诊断结果，再按账号灰度启用。API Key 账号和未命中灰度的 OAuth 账号继续走 Sub2API 原有路径。
 
-## 9. 发布前检查清单
+## 9. 随镜像分发插件包
+
+仓库自带的 `backend/pluginimpl/openaitransport` 已接入构建链，不需要在部署机上单独编译：
+
+```bash
+make plugin-package        # 当前平台
+make plugin-package-all    # darwin/linux × amd64/arm64
+```
+
+`Dockerfile` 在 backend 构建阶段按目标架构出包（`linux-<arch>`），产物在镜像内 `/app/plugin-packages/`：
+
+```bash
+# 已签名包：私钥通过 build secret 传入，且必须显式 PLUGIN_SIGN=1
+docker build --build-arg PLUGIN_SIGN=1 \
+  --secret id=plugin_signing_key,src="$HOME/.sub4api/plugin-signing.key" -t sub2api:prod .
+docker create --name pkg sub2api:prod && docker cp pkg:/app/plugin-packages/sub4api-openai-transport-0.1.0.s2plugin . && docker rm pkg
+```
+
+未传 secret、或 `PLUGIN_SIGN=0`（默认）时镜像内是未签名包，只能在 `plugins.allow_unsigned: true` 的调试环境安装；`PLUGIN_SIGN=1` 却没给 secret 会让构建直接失败，避免“以为签了其实没签”。CI 用仓库 secret `PLUGIN_SIGNING_KEY` 自动决定这两者。`PLUGIN_VERSION` 可用 `--build-arg` 覆盖。插件版本与宿主版本独立，不需要跟随 `VERSION`。
+
+## 10. 发布前检查清单
 
 - 插件版本与 `GetInfo` 返回值一致；
 - `requires.sub2api` 覆盖范围经过验证，没有未经测试的破坏性版本；
@@ -211,7 +231,7 @@ SUB2API_TEST_PLUGIN_PACKAGE=plugins/my-openai-plugin/dist/my-openai-plugin.s2plu
 - 配置切换、请求取消、响应关闭和错误重试语义经过测试；
 - 发布说明包含升级、停用、回滚和兼容版本信息。
 
-## 10. 常见问题
+## 11. 常见问题
 
 | 现象 | 排查方向 |
 | --- | --- |
@@ -222,12 +242,12 @@ SUB2API_TEST_PLUGIN_PACKAGE=plugins/my-openai-plugin/dist/my-openai-plugin.s2plu
 | 保存后配置未生效 | 查看 `ValidateConfig`、`ApplyConfig` 返回的规范化配置和诊断信息。 |
 | 请求失败后重复执行 | 检查 `ForwardResponseError.request_sent` 是否准确反映请求是否可能已发出。 |
 
-## 11. 需要扩展能力时
+## 12. 需要扩展能力时
 
 如果新插件需要支持其他 Provider、其他账号类型或新的消息字段，应先扩展并版本化公开协议，再由宿主增加能力匹配和生命周期处理。不要仅通过清单声明一个宿主尚未实现的能力。这样可以让旧插件继续运行，也能让新宿主明确拒绝不兼容的插件。
 
 Sub2API 后续会持续补充更多 Provider 的插件适配说明，包括能力标识、请求和响应契约、配置字段、UI Bridge 使用方式、版本兼容要求以及测试清单。本文会随着这些能力的落地继续更新，Provider 专属章节会放在本节之后。
 
-## 12. 示例仓库预留
+## 13. 示例仓库预留
 
 后续计划提供独立的插件示例仓库，用于存放可复用的运行时骨架、UI 组件、打包工具和各 Provider 的最小实现。目前示例仓库尚未准备完成，因此暂不提供地址；正式发布后会在这里补充仓库地址、适用的 Sub2API 版本、示例插件版本和构建说明。
