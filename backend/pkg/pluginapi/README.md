@@ -57,7 +57,7 @@ ui/index.html
 ui/assets/...
 ```
 
-`manifest.json` 必须声明所有运行时和 UI 文件的 SHA-256。`signature.json` 使用受信任发布者的 Ed25519 私钥对 `manifest.json` 原始字节签名。官方 OpenAI Transport 公钥由宿主内置，第三方发布者公钥由部署者追加到 `plugins.trusted_publishers`。文件哈希由已签名清单保护。
+`manifest.json` 必须声明所有运行时和 UI 文件的 SHA-256。`signature.json` 使用受信任发布者的 Ed25519 私钥对 `manifest.json` 原始字节签名。宿主不内置任何发布者公钥；所有插件（含仓库自带的 `pluginimpl/openaitransport` 实现）都必须由部署者把发布者公钥写入 `plugins.trusted_publishers`。文件哈希由已签名清单保护。
 
 插件默认保持停用。未签名包默认拒绝安装；`plugins.allow_unsigned` 只应用于开发者自己构建的本地调试包。
 

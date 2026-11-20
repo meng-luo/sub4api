@@ -1165,10 +1165,15 @@ plugins:
   # Keep false in production. Enable only for local development packages you built yourself.
   # 生产环境应保持 false；仅调试自己构建的本地插件时临时开启。
   allow_unsigned: false
-  # Additional Ed25519 public keys indexed by signature.json key_id.
-  # OpenAI Transport's public key is built in; this map only adds third-party publishers.
-  # 以 signature.json 中 key_id 为索引的额外 Ed25519 公钥。
-  # OpenAI Transport 公钥已内置，此处只需添加第三方发布者。
+  # Reject OpenAI OAuth requests that miss the transport-plugin binding instead of
+  # silently falling back to the built-in Go transport (two network fingerprints).
+  # OpenAI OAuth 账号未命中出站插件绑定时直接拒绝，避免静默回落到内置 Go 传输层。
+  require_openai_oauth_plugin: false
+  # Trusted Ed25519 public keys indexed by signature.json key_id.
+  # The host ships NO built-in publisher key: every plugin (including the in-repo
+  # reference implementation under backend/pluginimpl) must be added here.
+  # 以 signature.json 中 key_id 为索引的受信任 Ed25519 公钥。
+  # 宿主不再内置任何发布者公钥：包括仓库自带实现在内的所有插件，都必须在此登记。
   trusted_publishers: {}
   max_upload_bytes: 134217728
   max_uncompressed_bytes: 268435456

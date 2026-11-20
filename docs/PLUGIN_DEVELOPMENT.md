@@ -171,7 +171,7 @@ plugins:
     my-publisher-v1: "BASE64_ED25519_PUBLIC_KEY"
 ```
 
-`trusted_publishers` 是在宿主内置官方公钥之外追加的信任来源，不能覆盖内置公钥。`signature.json` 中的 `key_id` 必须与配置键完全一致。密钥轮换时先发布包含新公钥的宿主配置或版本，再发布新签名包，最后再停用旧密钥。
+`trusted_publishers` 是宿主唯一的信任来源（宿主不再内置任何发布者公钥），`signature.json` 中的 `key_id` 必须与配置键完全一致。密钥轮换时先把新公钥加入宿主配置，再发布新签名包，最后再移除旧密钥。
 
 开发阶段如需使用未签名包，只应在隔离的本地环境临时设置 `plugins.allow_unsigned: true`，测试完成后立即恢复为 `false`。
 

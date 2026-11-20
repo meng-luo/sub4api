@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>OpenAI Transport 配置</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.6 -apple-system, "SF Pro Text", "PingFang SC", sans-serif; margin: 0; padding: 20px; }
+  h1 { font-size: 16px; margin: 0 0 12px; }
+  label { display: block; margin: 10px 0 4px; font-weight: 600; }
+  select, input[type="number"] { width: 100%; padding: 6px 8px; box-sizing: border-box; }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+  pre { background: rgba(127,127,127,.12); padding: 10px; border-radius: 6px; overflow: auto; }
+  button { margin-top: 12px; padding: 8px 14px; }
+</style>
+</head>
+<body>
+  <h1>OpenAI Transport（自研出站传输）</h1>
+  <p>本页通过 UI Bridge 读写插件配置；宿主负责保存与下发。</p>
+  <label for="tls_profile">TLS 指纹</label>
+  <select id="tls_profile">
+    <option value="rustls">rustls（模拟 Codex CLI，推荐）</option>
+    <option value="go">go（对照排查用）</option>
+  </select>
+  <label for="http2">HTTP/2</label>
+  <select id="http2"><option value="true">启用</option><option value="false">禁用</option></select>
+  <label for="compression">请求体压缩</label>
+  <select id="body_compression"><option value="false">关闭（与官方一致）</option><option value="true">zstd</option></select>
+  <div class="row">
+    <div><label for="handshake_timeout_seconds">握手超时(s)</label><input id="handshake_timeout_seconds" type="number" min="1" max="300" /></div>
+    <div><label for="response_header_timeout_seconds">响应头超时(s)</label><input id="response_header_timeout_seconds" type="number" min="0" max="3600" /></div>
+  </div>
+  <button id="save">保存配置</button>
+  <pre id="out">等待宿主消息…</pre>
+<script>
+  // UI Bridge 协议由宿主注入；此处只做最小实现，宿主不支持时静默降级。
+  const out = document.getElementById('out');
+  function setConfig(cfg) {
+    if (!cfg) return;
+    if (cfg.tls_profile) document.getElementById('tls_profile').value = cfg.tls_profile;
+    if (typeof cfg.http2 === 'boolean') document.getElementById('http2').value = String(cfg.http2);
+    if (typeof cfg.body_compression === 'boolean') document.getElementById('body_compression').value = String(cfg.body_compression);
+    if (cfg.handshake_timeout_seconds) document.getElementById('handshake_timeout_seconds').value = cfg.handshake_timeout_seconds;
+    if (cfg.response_header_timeout_seconds != null) document.getElementById('response_header_timeout_seconds').value = cfg.response_header_timeout_seconds;
+  }
+  window.addEventListener('message', (e) => {
+    const data = e.data || {};
+    if (data.type === 'sub2api:config') setConfig(data.config);
+  });
+  document.getElementById('save').addEventListener('click', () => {
+    const cfg = {
+      tls_profile: document.getElementById('tls_profile').value,
+      http2: document.getElementById('http2').value === 'true',
+      body_compression: document.getElementById('body_compression').value === 'true',
+      handshake_timeout_seconds: Number(document.getElementById('handshake_timeout_seconds').value || 15),
+      response_header_timeout_seconds: Number(document.getElementById('response_header_timeout_seconds').value || 600),
+    };
+    parent.postMessage({ type: 'sub2api:save', config: cfg }, '*');
+    out.textContent = JSON.stringify(cfg, null, 2);
+  });
+</script>
+</body>
+</html>

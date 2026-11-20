@@ -40,6 +40,15 @@ func openAIWSRejectedFieldRetryHTTPStatus(message []byte) int {
 	return openAIWSErrorHTTPStatus(message)
 }
 
+// rejectUnboundOpenAIOAuthWSAccount 是 WS 入口的 fail-closed 判据，与 HTTP 面的
+// PluginManager.MissingOpenAIOAuthPluginBinding 共用同一规则。返回 nil 表示可以继续。
+func (s *OpenAIGatewayService) rejectUnboundOpenAIOAuthWSAccount(account *Account) error {
+	if s == nil || s.pluginManager == nil || !s.pluginManager.MissingOpenAIOAuthPluginBinding(account) {
+		return nil
+	}
+	return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, errOpenAIOAuthPluginNotBound, nil)
+}
+
 func (s *OpenAIGatewayService) openAIWSIngressInterTurnIdleTimeout() time.Duration {
 	if s == nil || s.cfg == nil || s.cfg.Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds <= 0 {
 		return 0
@@ -82,6 +91,12 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 	if account == nil {
 		return errors.New("account is nil")
+	}
+	// fail-closed 与 HTTP 面共用判据：部署者要求 OpenAI OAuth 出站必须经插件，
+	// 而该账号没有命中插件绑定时，WebSocket 会话也一律拒绝——否则内置 Go 传输层
+	// 会在 WS 上呈现另一套指纹，让 require_openai_oauth_plugin 变成只挡 HTTP 的空壳。
+	if err := s.rejectUnboundOpenAIOAuthWSAccount(account); err != nil {
+		return err
 	}
 	// A handler may reuse the same gin context across account failover attempts.
 	// Never let an OAuth attempt's response aliases leak into the next account.

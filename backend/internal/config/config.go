@@ -171,12 +171,16 @@ func (c *MCPConfig) Validate() error {
 // PluginConfig 控制管理员手动上传的本地进程插件。
 // 默认不包含插件，也不允许安装未签名插件；TrustedPublishers 用于追加第三方发布者。
 type PluginConfig struct {
-	DataDir              string            `mapstructure:"data_dir"`
-	AllowUnsigned        bool              `mapstructure:"allow_unsigned"`
-	TrustedPublishers    map[string]string `mapstructure:"trusted_publishers"`
-	MaxUploadBytes       int64             `mapstructure:"max_upload_bytes"`
-	MaxUncompressedBytes int64             `mapstructure:"max_uncompressed_bytes"`
-	StartTimeoutSeconds  int               `mapstructure:"start_timeout_seconds"`
+	DataDir           string            `mapstructure:"data_dir"`
+	AllowUnsigned     bool              `mapstructure:"allow_unsigned"`
+	TrustedPublishers map[string]string `mapstructure:"trusted_publishers"`
+	// RequireOpenAIOAuthPlugin 为 true 时，OpenAI OAuth 账号若未命中出站插件绑定，
+	// 直接拒绝请求而不是静默回落到内置 Go 传输层。用于避免同一批账号在网络上
+	// 呈现两种不同的客户端指纹。
+	RequireOpenAIOAuthPlugin bool  `mapstructure:"require_openai_oauth_plugin"`
+	MaxUploadBytes           int64 `mapstructure:"max_upload_bytes"`
+	MaxUncompressedBytes     int64 `mapstructure:"max_uncompressed_bytes"`
+	StartTimeoutSeconds      int   `mapstructure:"start_timeout_seconds"`
 }
 
 type LogConfig struct {

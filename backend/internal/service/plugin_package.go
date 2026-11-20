@@ -20,12 +20,9 @@ import (
 )
 
 const (
-	pluginManifestFilename                   = "manifest.json"
-	pluginSignatureFilename                  = "signature.json"
-	pluginArchiveMaxFiles                    = 512
-	builtInOpenAITransportPluginID           = "local.sub2api.openai-transport"
-	builtInOpenAITransportPublisherKeyID     = "sub2api-openai-transport-v1"
-	builtInOpenAITransportPublisherKeyBase64 = "MqzSXAoG0iVR5kKWrC+mqcCeExkrT6zAr2WpQ4sA+yc="
+	pluginManifestFilename  = "manifest.json"
+	pluginSignatureFilename = "signature.json"
+	pluginArchiveMaxFiles   = 512
 )
 
 type PluginPackageInstaller struct {
@@ -285,14 +282,12 @@ func (i *PluginPackageInstaller) verifySignature(file *zip.File, manifestRaw []b
 	return PluginSignatureTrusted, nil
 }
 
-func trustedPluginPublisherKey(cfg *config.Config, keyID, pluginID string) string {
-	// 内置公钥是官方私有插件的固定信任根，不允许被部署配置覆盖。
-	if keyID == builtInOpenAITransportPublisherKeyID {
-		if pluginID != builtInOpenAITransportPluginID {
-			return ""
-		}
-		return builtInOpenAITransportPublisherKeyBase64
-	}
+// trustedPluginPublisherKey 只从部署配置读取受信任公钥。
+//
+// 历史版本对某个闭源官方包内置过固定公钥，但该包从未随仓库分发，
+// 这层内置信任根等于给一个不存在的产物留后门，已移除：任何插件都必须由
+// 部署者显式把发布者公钥写入 plugins.trusted_publishers 才能安装。
+func trustedPluginPublisherKey(cfg *config.Config, keyID, _ string) string {
 	if cfg == nil {
 		return ""
 	}

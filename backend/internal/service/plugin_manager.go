@@ -944,7 +944,17 @@ func (m *PluginManager) ReadUIAsset(ctx context.Context, id int64, relative stri
 	return data, path, nil
 }
 
+// errOpenAIOAuthPluginNotBound 是 plugins.require_openai_oauth_plugin 打开时，
+// 未命中插件绑定的 OpenAI OAuth 请求的拒绝原因。HTTP 面直接返回该错误，
+// WebSocket 面用它作为会话关闭原因。
+const errOpenAIOAuthPluginNotBound = "OpenAI OAuth 账号未命中出站插件，按配置拒绝回落"
+
 func (m *PluginManager) RoundTripOpenAIOAuth(ctx context.Context, request *http.Request, proxyURL string, account *Account) (*http.Response, bool, error) {
+	// fail-closed：部署者显式要求 OAuth 出站必须经插件时，未命中插件的账号
+	// 不再静默回落到内置 Go 传输层（那会让同一批账号呈现两种网络指纹）。
+	if m.MissingOpenAIOAuthPluginBinding(account) {
+		return nil, true, errors.New(errOpenAIOAuthPluginNotBound)
+	}
 	if !m.ShouldRouteOpenAIOAuth(account) {
 		return nil, false, nil
 	}
@@ -976,6 +986,25 @@ func (m *PluginManager) RoundTripOpenAIOAuth(ctx context.Context, request *http.
 		return nil, true, err
 	}
 	return response, true, nil
+}
+
+// requiresOpenAIOAuthPlugin 判断部署者是否要求该账号必须经插件出站。
+// 开关为 plugins.require_openai_oauth_plugin，默认关闭以兼容既有部署。
+func (m *PluginManager) requiresOpenAIOAuthPlugin(account *Account) bool {
+	if m == nil || m.cfg == nil || account == nil {
+		return false
+	}
+	if !m.cfg.Plugins.RequireOpenAIOAuthPlugin {
+		return false
+	}
+	return account.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth && account.IsOpenAIOAuthLike()
+}
+
+// MissingOpenAIOAuthPluginBinding 报告该账号是否「按部署配置必须经插件出站、但当前
+// 没有命中插件绑定」。HTTP 面与 WebSocket 面共用这一判据，保证 fail-closed 规则在两条
+// 入口上一致：命中即拒绝，绝不静默回落到内置 Go 传输层。
+func (m *PluginManager) MissingOpenAIOAuthPluginBinding(account *Account) bool {
+	return m.requiresOpenAIOAuthPlugin(account) && !m.ShouldRouteOpenAIOAuth(account)
 }
 
 // ShouldRouteOpenAIOAuth 判断该账号是否命中当前 OpenAI OAuth 插件绑定。
