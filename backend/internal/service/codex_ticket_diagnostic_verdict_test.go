@@ -10,7 +10,11 @@ import (
 
 func referenceSampleText(t *testing.T, model string) (string, int) {
 	t.Helper()
-	raw, err := os.ReadFile("testdata/modeltrace_gpt_reference.json")
+	path := "testdata/modeltrace_gpt_reference.json"
+	if isModelTraceGPT62Group(model) {
+		path = "testdata/modeltrace_gpt62_reference.json"
+	}
+	raw, err := os.ReadFile(path)
 	require.NoError(t, err)
 	var samples []struct {
 		Model         string `json:"model"`
@@ -35,11 +39,42 @@ func TestModelTraceDiagnosticModelsAddFingerprintlessCatalogModel(t *testing.T) 
 	diagnostic, err := ModelTraceDiagnosticModels()
 	require.NoError(t, err)
 	require.Contains(t, diagnostic, "gpt-6.1-sol")
-	require.Len(t, diagnostic, len(bankModels)+1, "extra models must not duplicate bank classes")
+	require.Contains(t, diagnostic, modelTraceGPT62Astra)
+	require.Contains(t, diagnostic, modelTraceGPT62Sol)
+	require.Len(t, diagnostic, len(bankModels)+3, "extra models must not duplicate bank classes")
 	for _, model := range bankModels {
 		require.Contains(t, diagnostic, model)
 	}
 	require.Empty(t, duplicateValues(diagnostic))
+}
+
+func TestEvaluateCodexGPT62DiagnosticUsesGroupAndPinnedBank(t *testing.T) {
+	legacyBank, err := parseModelTraceBank(embeddedModelTraceBank)
+	require.NoError(t, err)
+	previous := modelTraceActive.Swap(&modelTraceVersion{bank: legacyBank, commit: "refreshed-legacy"})
+	t.Cleanup(func() { modelTraceActive.Store(previous) })
+
+	models, err := ModelTraceTicketModels()
+	require.NoError(t, err)
+	require.Subset(t, models, []string{modelTraceGPT62Astra, modelTraceGPT62Sol})
+	for _, requested := range []string{modelTraceGPT62Astra, modelTraceGPT62Sol} {
+		for _, actual := range []string{modelTraceGPT62Astra, modelTraceGPT62Sol, "gpt-5.6-sol"} {
+			t.Run(requested+"/"+actual, func(t *testing.T) {
+				output, count := referenceSampleText(t, actual)
+				verdict := EvaluateCodexDiagnostic(requested, output, ModelTraceChallenge{ExpectedCount: count})
+				require.Equal(t, modelTraceGPT62Commit, verdict.FingerprintCommit)
+				if isModelTraceGPT62Group(actual) {
+					require.Equal(t, actual, verdict.PredictedModel)
+					require.Equal(t, "normal", verdict.Status)
+					require.Equal(t, "shared_fingerprint_match", verdict.Reason)
+				} else {
+					require.False(t, isModelTraceGPT62Group(verdict.PredictedModel))
+					require.Equal(t, "degraded", verdict.Status)
+					require.Equal(t, "fingerprint_mismatch", verdict.Reason)
+				}
+			})
+		}
+	}
 }
 
 func duplicateValues(values []string) []string {

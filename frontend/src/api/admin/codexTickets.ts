@@ -57,6 +57,7 @@ export interface TicketDiagnostic {
   probability?: number
   parsed_number_count?: number
   http_status?: number
+  fingerprint_commit?: string
 }
 
 const base = (id: number) => `/admin/accounts/${id}`

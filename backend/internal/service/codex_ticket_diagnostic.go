@@ -100,20 +100,23 @@ func (s *OpenAIGatewayService) RunCodexNativeDiagnostic(ctx context.Context, acc
 // CodexDiagnosticVerdict 是一次降智判定。
 // Status: normal(正常) / degraded(疑似降智) / uncertain(不确定) / failed(请求失败)。
 type CodexDiagnosticVerdict struct {
-	Status         string
-	Reason         string
-	PredictedModel string
-	Probability    float64
-	ParsedCount    int
+	Status            string
+	Reason            string
+	PredictedModel    string
+	Probability       float64
+	ParsedCount       int
+	FingerprintCommit string
 }
 
 // EvaluateCodexDiagnostic 把探测输出与请求模型比对。
 //
-// Models without an independent class can pass a configured shared fingerprint.
 // Preserve the predicted class so a group match does not imply exact identity.
 func EvaluateCodexDiagnostic(model, output string, challenge ModelTraceChallenge) CodexDiagnosticVerdict {
-	prediction, snapshot, err := modelTracePredictSnapshot(output, challenge.ExpectedCount)
+	prediction, snapshot, err := modelTracePredictForModel(model, output, challenge.ExpectedCount)
 	verdict := CodexDiagnosticVerdict{Status: "failed", Reason: "insufficient_numbers", ParsedCount: prediction.ParsedCount}
+	if snapshot != nil {
+		verdict.FingerprintCommit = snapshot.commit
+	}
 	if err != nil {
 		return verdict
 	}
@@ -122,7 +125,7 @@ func EvaluateCodexDiagnostic(model, output string, challenge ModelTraceChallenge
 	if snapshot.bank.fingerprintMatches(model, prediction.Model) {
 		verdict.Status = "normal"
 		verdict.Reason = ""
-		if prediction.Model != model {
+		if prediction.Model != model || isModelTraceGPT62Group(model) {
 			verdict.Reason = "shared_fingerprint_match"
 		}
 		return verdict

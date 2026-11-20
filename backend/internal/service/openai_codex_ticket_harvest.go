@@ -181,6 +181,9 @@ func (s *OpenAIGatewayService) runCodexTicketAttemptWithChallengeGenerator(ctx c
 	a := &result.CodexTicketAttempt
 	a.AccountID, a.Model, a.Trigger = account.ID, model, trigger
 	a.VerificationMethod, a.FingerprintCommit = "modeltrace_v1", ModelTraceBankCommit()
+	if isModelTraceGPT62Group(model) {
+		a.FingerprintCommit = modelTraceGPT62Commit
+	}
 	defer func() {
 		a.OccurredAt = time.Now()
 		a.DurationMS = int(a.OccurredAt.Sub(start).Milliseconds())
@@ -258,7 +261,7 @@ func (s *OpenAIGatewayService) runCodexTicketAttemptWithChallengeGenerator(ctx c
 		a.Outcome, a.ReasonCode = "miss", "http_status"
 		return result, nil
 	}
-	prediction, snapshot, predictErr := modelTracePredictSnapshot(output, challenge.ExpectedCount)
+	prediction, snapshot, predictErr := modelTracePredictForModel(model, output, challenge.ExpectedCount)
 	if snapshot != nil {
 		a.FingerprintCommit = snapshot.commit
 	}

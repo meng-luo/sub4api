@@ -15,13 +15,14 @@ type codexDiagnosticProbe interface {
 }
 
 type codexDiagnosticItem struct {
-	Model          string  `json:"model"`
-	Status         string  `json:"status"`
-	Reason         string  `json:"reason,omitempty"`
-	PredictedModel string  `json:"predicted_model,omitempty"`
-	Probability    float64 `json:"probability,omitempty"`
-	ParsedCount    int     `json:"parsed_number_count,omitempty"`
-	HTTPStatus     int     `json:"http_status,omitempty"`
+	Model             string  `json:"model"`
+	Status            string  `json:"status"`
+	Reason            string  `json:"reason,omitempty"`
+	PredictedModel    string  `json:"predicted_model,omitempty"`
+	Probability       float64 `json:"probability,omitempty"`
+	ParsedCount       int     `json:"parsed_number_count,omitempty"`
+	HTTPStatus        int     `json:"http_status,omitempty"`
+	FingerprintCommit string  `json:"fingerprint_commit,omitempty"`
 }
 
 func (h *AccountHandler) DiagnoseCodexModels(c *gin.Context) {
@@ -88,6 +89,7 @@ func (h *AccountHandler) diagnoseCodexModels(c *gin.Context, generateChallenge f
 		item.PredictedModel = verdict.PredictedModel
 		item.Probability = verdict.Probability
 		item.ParsedCount = verdict.ParsedCount
+		item.FingerprintCommit = verdict.FingerprintCommit
 		results = append(results, item)
 	}
 	response.Success(c, gin.H{"items": results, "canceled": c.Request.Context().Err() != nil})

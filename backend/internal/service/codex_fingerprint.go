@@ -14,10 +14,22 @@ import (
 )
 
 const modelTraceFallbackCommit = "55a2e4a55170423b484d701e9a82ab62b268c811"
+const modelTraceGPT62Commit = "70159b7536a2ceb55c478c8c9472da81d3627e59"
 const modelTraceDimension = 355
 
 //go:embed modeltrace_unified_bank.json
 var embeddedModelTraceBank []byte
+
+// Scoring fields from Ikaleio/lm-detector's data/unified_bank.json at
+// modelTraceGPT62Commit. Keep all competing classes for top-1 classification.
+//
+//go:embed modeltrace_gpt62_bank.json
+var embeddedModelTraceGPT62Bank []byte
+
+const (
+	modelTraceGPT62Astra = "gpt-6.2-astra"
+	modelTraceGPT62Sol   = "gpt-6.2-sol"
+)
 
 var modelTraceNumbers = regexp.MustCompile(`[0-9]+`)
 
@@ -63,6 +75,18 @@ var modelTraceActive atomic.Pointer[modelTraceVersion]
 
 var modelTraceFallback = sync.OnceValues(func() (*modelTraceBank, error) {
 	return parseModelTraceBank(embeddedModelTraceBank)
+})
+
+var modelTraceGPT62Bank = sync.OnceValues(func() (*modelTraceVersion, error) {
+	bank, err := parseModelTraceBank(embeddedModelTraceGPT62Bank)
+	if err != nil {
+		return nil, err
+	}
+	if bank.fingerprintModel(modelTraceGPT62Sol) != modelTraceGPT62Sol ||
+		bank.fingerprintModel(modelTraceGPT62Astra) != modelTraceGPT62Astra {
+		return nil, errors.New("missing GPT-6.2 fingerprint classes")
+	}
+	return &modelTraceVersion{bank: bank, commit: modelTraceGPT62Commit}, nil
 })
 
 func parseModelTraceBank(data []byte) (*modelTraceBank, error) {
@@ -177,8 +201,15 @@ func (bank *modelTraceBank) fingerprintModel(model string) string {
 }
 
 func (bank *modelTraceBank) fingerprintMatches(model, predicted string) bool {
+	if isModelTraceGPT62Group(model) {
+		return isModelTraceGPT62Group(predicted) && bank.fingerprintModel(predicted) == predicted
+	}
 	reference := bank.fingerprintModel(model)
 	return reference != "" && reference == predicted
+}
+
+func isModelTraceGPT62Group(model string) bool {
+	return model == modelTraceGPT62Sol || model == modelTraceGPT62Astra
 }
 
 // ModelTraceDiagnosticModels includes models verified through a shared class.
@@ -198,6 +229,14 @@ func ModelTraceDiagnosticModels() ([]string, error) {
 		}
 		known[shared.model] = true
 		models = append(models, shared.model)
+	}
+	if _, err := modelTraceGPT62Bank(); err != nil {
+		return nil, err
+	}
+	for _, model := range []string{modelTraceGPT62Sol, modelTraceGPT62Astra} {
+		if !known[model] {
+			models = append(models, model)
+		}
 	}
 	return models, nil
 }
@@ -406,12 +445,29 @@ func ModelTracePredictCommitted(text string, expectedCount int) (ModelTracePredi
 	return prediction, snapshot.commit, err
 }
 
-// Keep classification and shared-class matching on the same bank during refresh.
 func modelTracePredictSnapshot(text string, expectedCount int) (ModelTracePrediction, *modelTraceVersion, error) {
 	snapshot, err := currentModelTraceBank()
 	if err != nil {
 		return ModelTracePrediction{}, nil, err
 	}
+	prediction, err := snapshot.predict(text, expectedCount)
+	return prediction, snapshot, err
+}
+
+// Use the same snapshot for classification, group matching and provenance.
+func modelTracePredictForModel(model, text string, expectedCount int) (ModelTracePrediction, *modelTraceVersion, error) {
+	if !isModelTraceGPT62Group(model) {
+		return modelTracePredictSnapshot(text, expectedCount)
+	}
+	snapshot, err := modelTraceGPT62Bank()
+	if err != nil {
+		return ModelTracePrediction{}, nil, err
+	}
+	prediction, err := snapshot.predict(text, expectedCount)
+	return prediction, snapshot, err
+}
+
+func (snapshot *modelTraceVersion) predict(text string, expectedCount int) (ModelTracePrediction, error) {
 	bank := snapshot.bank
 	numbers := modelTraceParseNumbers(text)
 	minimum := 80
@@ -419,7 +475,7 @@ func modelTracePredictSnapshot(text string, expectedCount int) (ModelTracePredic
 		minimum = max(minimum, int(math.Ceil(float64(expectedCount)*0.55)))
 	}
 	if len(numbers) < minimum {
-		return ModelTracePrediction{ParsedCount: len(numbers)}, snapshot, errors.New("insufficient_numbers")
+		return ModelTracePrediction{ParsedCount: len(numbers)}, errors.New("insufficient_numbers")
 	}
 	scores := modelTraceScores(numbers, bank)
 	beta := bank.Calibration["1"].Beta
@@ -437,7 +493,7 @@ func modelTracePredictSnapshot(text string, expectedCount int) (ModelTracePredic
 			winner = index
 		}
 	}
-	return ModelTracePrediction{Model: bank.Models[winner].ID, Probability: weights[winner] / total, ParsedCount: len(numbers)}, snapshot, nil
+	return ModelTracePrediction{Model: bank.Models[winner].ID, Probability: weights[winner] / total, ParsedCount: len(numbers)}, nil
 }
 
 func currentModelTraceBank() (*modelTraceVersion, error) {

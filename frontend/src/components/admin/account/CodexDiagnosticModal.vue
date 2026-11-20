@@ -96,7 +96,7 @@
               </template>
               <div v-if="entry.result.reason" class="sm:col-span-2"><dt class="text-gray-500 dark:text-dark-400">{{ text('reason') }}</dt><dd class="mt-1 whitespace-pre-wrap break-words text-gray-800 [overflow-wrap:anywhere] dark:text-dark-200">{{ entry.result.reason === 'template_invalid' ? text('templateInvalid') : entry.result.reason === 'shared_fingerprint_match' ? text('sharedFingerprintHint') : entry.result.reason }}</dd></div>
               <div v-if="entry.result.http_status" class="sm:col-span-2"><dt class="text-gray-500 dark:text-dark-400">{{ text('httpStatus') }}</dt><dd class="mt-1 break-all text-gray-800 dark:text-dark-200">HTTP {{ entry.result.http_status }}</dd></div>
-              <div class="sm:col-span-2"><dt class="text-gray-500 dark:text-dark-400">{{ text('fingerprint') }}</dt><dd class="mt-1 break-all font-mono text-gray-800 dark:text-dark-200">{{ diagnosticRun.fingerprintCommit || '—' }}</dd></div>
+              <div class="sm:col-span-2"><dt class="text-gray-500 dark:text-dark-400">{{ text('fingerprint') }}</dt><dd class="mt-1 break-all font-mono text-gray-800 dark:text-dark-200">{{ entry.result.fingerprint_commit || diagnosticRun.fingerprintCommit || '—' }}</dd></div>
             </dl>
           </article>
         </div>

@@ -227,3 +227,47 @@ func TestCodexTicketSharedFingerprintHarvest(t *testing.T) {
 		})
 	}
 }
+
+func TestCodexTicketGPT62GroupKeepsModelTicketsSeparate(t *testing.T) {
+	var issued = map[string]string{
+		modelTraceGPT62Sol:   "sol-state",
+		modelTraceGPT62Astra: "astra-state",
+	}
+	ctx := context.Background()
+	for _, requested := range []string{modelTraceGPT62Sol, modelTraceGPT62Astra} {
+		t.Run(requested, func(t *testing.T) {
+			other := modelTraceGPT62Astra
+			if requested == modelTraceGPT62Astra {
+				other = modelTraceGPT62Sol
+			}
+			output, expected := referenceSampleText(t, other)
+			upstream := &codexTicketFuncUpstream{do: func(req *http.Request) (*http.Response, error) {
+				body, err := io.ReadAll(req.Body)
+				require.NoError(t, err)
+				require.Equal(t, requested, gjson.GetBytes(body, "model").String())
+				response := challengeHarvestResponse(t, output)
+				response.Header.Set(openAICodexTurnStateHeader, issued[requested])
+				return response, nil
+			}}
+			svc, account, _ := challengeHarvestService(t, upstream)
+			svc.cfg.Gateway.OpenAICodexTicket.FailClosed = true
+			account.Extra = map[string]any{
+				openAICodexTicketExtraKey(other): verifiedTicket(account, other, issued[other], ""),
+			}
+			require.True(t, svc.codexTicketSupportedModel(requested))
+			result, err := svc.runCodexTicketAttemptWithChallengeGenerator(ctx, account, requested, "manual", func() (ModelTraceChallenge, error) {
+				return ModelTraceChallenge{Prompt: "6.2 group challenge", ExpectedCount: expected}, nil
+			})
+			require.NoError(t, err)
+			require.Equal(t, "success", result.Outcome)
+			require.Equal(t, other, result.FingerprintPredictedModel)
+			require.Equal(t, modelTraceGPT62Commit, result.FingerprintCommit)
+			require.Equal(t, modelTraceGPT62Commit, svc.lookupOpenAICodexTicket(account, requested).FingerprintCommit)
+			for model, state := range issued {
+				headers := http.Header{}
+				require.NoError(t, svc.applyOpenAICodexTicket(ctx, account, model, headers))
+				require.Equal(t, state, headers.Get(openAICodexTurnStateHeader))
+			}
+		})
+	}
+}
