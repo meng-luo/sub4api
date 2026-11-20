@@ -834,7 +834,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_CompactUsesJSONAndKeepsNonStreami
 	require.Equal(t, "compact me", gjson.GetBytes(upstream.lastBody, "input.0.text").String())
 	require.Equal(t, "local-test-instructions", strings.TrimSpace(gjson.GetBytes(upstream.lastBody, "instructions").String()))
 	require.Equal(t, "application/json", upstream.lastReq.Header.Get("Accept"))
-	require.Equal(t, codexCLIVersion, upstream.lastReq.Header.Get("Version"))
+	require.Empty(t, upstream.lastReq.Header.Get("Version"))
 	require.NotEmpty(t, upstream.lastReq.Header.Get("Session_Id"))
 	require.Equal(t, "chatgpt.com", upstream.lastReq.Host)
 	require.Equal(t, "chatgpt-acc", upstream.lastReq.Header.Get("chatgpt-account-id"))
@@ -2077,7 +2077,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_OfficialIdentityUnified(t *testin
 	require.NotNil(t, upstream.lastReq)
 	require.Equal(t, codexCLIUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 	require.Equal(t, openai.CodexDefaultOriginator, upstream.lastReq.Header.Get("originator"))
-	require.Equal(t, codexCLIVersion, upstream.lastReq.Header.Get("version"))
+	require.Empty(t, upstream.lastReq.Header.Get("version"))
 }
 
 // 透传模式下真实 TUI 客户端的身份同样被统一：被优先降载的身份不会带到上游。
@@ -2121,7 +2121,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_CodexTuiIdentityUnified(t *testin
 	require.NotNil(t, upstream.lastReq)
 	require.Equal(t, codexCLIUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 	require.Equal(t, openai.CodexDefaultOriginator, upstream.lastReq.Header.Get("originator"))
-	require.Equal(t, codexCLIVersion, upstream.lastReq.Header.Get("version"))
+	require.Empty(t, upstream.lastReq.Header.Get("version"))
 }
 
 func TestOpenAIGatewayService_CodexFingerprintHTTPTransformedHeaderBodyParityAndDefaultCacheKey(t *testing.T) {

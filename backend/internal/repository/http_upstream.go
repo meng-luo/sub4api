@@ -219,7 +219,7 @@ func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID i
 	// 执行请求
 	client := s.httpClientForUpstreamRequest(entry.client, req)
 	client = httpClientWithGrokAccessDeniedFallback(client)
-	resp, err := doUpstreamRequest(client, req, s.upstreamDrainTimeout())
+	resp, err := doUpstreamRequest(client, req, s.codexRequestCompression(), s.upstreamDrainTimeout())
 	if err != nil {
 		s.recordOpenAIHTTP2Failure(profile, entry.protocolMode, entry.proxyKey, err)
 		// 请求失败，立即减少计数
@@ -280,7 +280,7 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 
 	client := s.httpClientForUpstreamRequest(entry.client, req)
 	client = httpClientWithGrokAccessDeniedFallback(client)
-	resp, err := doUpstreamRequest(client, req, s.upstreamDrainTimeout())
+	resp, err := doUpstreamRequest(client, req, s.codexRequestCompression(), s.upstreamDrainTimeout())
 	if err != nil {
 		atomic.AddInt64(&entry.inFlight, -1)
 		atomic.StoreInt64(&entry.lastUsed, time.Now().UnixNano())
@@ -303,22 +303,44 @@ func (s *httpUpstreamService) upstreamDrainTimeout() time.Duration {
 	return pkghttputil.DefaultUpstreamDrainTimeout
 }
 
+// codexRequestCompression 描述一次出站请求的 Codex 请求体压缩策略。
+// mode 必须是 config.GatewayCodexConfig.EffectiveRequestCompression() 归一化后的取值
+// （off / on / by_size）；minBytes 仅在 by_size 模式下生效。
+type codexRequestCompression struct {
+	mode     string
+	minBytes int64
+}
+
+// defaultCodexRequestCompression 是配置缺失时的策略，与 viper 默认值一致。
+func defaultCodexRequestCompression() codexRequestCompression {
+	return codexRequestCompression{
+		mode:     config.CodexRequestCompressionBySize,
+		minBytes: config.DefaultCodexRequestCompressionMinBytes,
+	}
+}
+
+// codexRequestCompression 由全局配置解析压缩策略；服务或配置缺失时回落默认值，
+// 零值 Config 同样按默认（by_size + 8 MiB）处理。
+func (s *httpUpstreamService) codexRequestCompression() codexRequestCompression {
+	if s == nil || s.cfg == nil {
+		return defaultCodexRequestCompression()
+	}
+	return codexRequestCompression{
+		mode:     s.cfg.Gateway.Codex.EffectiveRequestCompression(),
+		minBytes: s.cfg.Gateway.Codex.EffectiveRequestCompressionMinBytes(),
+	}
+}
+
 // doUpstreamRequest owns cancellation for one attempt, without cancelling the
 // caller's context (which may be detached for billing or reused for retries).
-func doUpstreamRequest(client *http.Client, req *http.Request, drainTimeouts ...time.Duration) (*http.Response, error) {
+func doUpstreamRequest(client *http.Client, req *http.Request, compression codexRequestCompression, drainTimeouts ...time.Duration) (*http.Response, error) {
 	var drainTimeout time.Duration
 	if len(drainTimeouts) > 0 {
 		drainTimeout = drainTimeouts[0]
 	}
 	ctx, cancel := pkghttputil.NewUpstreamAttemptContext(req.Context(), drainTimeout)
 	wireRequest := req.WithContext(ctx)
-	if err := compressCodexResponsesRequest(wireRequest); err != nil {
-		cancel()
-		if wireRequest.Body != nil {
-			_ = wireRequest.Body.Close()
-		}
-		return nil, err
-	}
+	compressCodexResponsesRequest(wireRequest, compression)
 	resp, err := servertiming.Do(client, wireRequest)
 	if err != nil {
 		cancel()
@@ -333,36 +355,61 @@ var codexResponsesZstdEncoder = sync.OnceValues(func() (*zstd.Encoder, error) {
 	return zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1), zstd.WithEncoderLevel(zstd.SpeedDefault))
 })
 
-// Codex compresses regular ChatGPT Responses requests, not the public API,
-// legacy compact endpoint, or WS frames. Keep the semantic request and its
-// GetBody replay unchanged; only the per-attempt wire request is encoded.
-func compressCodexResponsesRequest(req *http.Request) error {
+// 官方 Codex 业务请求体一律明文（45 KB ~ 31.7 MB 实测均不带 Content-Encoding），
+// 因此压缩只是可选优化：off 永不压缩、on 命中即压缩、by_size（默认）仅在请求体超过
+// 阈值时压缩。压缩只作用于 ChatGPT Responses 端点，不涉及 public API、legacy compact
+// 端点或 WS 帧，并保持语义请求与 GetBody 重放不变——仅编码每次尝试的线上请求。
+//
+// 任何压缩失败（编码器不可用、body 读取失败）都回退明文且不报错：压缩是优化，
+// 不能让请求失败。回退时原请求的 Body/GetBody/ContentLength/Header 保持原样。
+func compressCodexResponsesRequest(req *http.Request, policy codexRequestCompression) bool {
 	if req == nil || req.URL == nil || req.Method != http.MethodPost ||
 		!strings.EqualFold(req.URL.Scheme, "https") ||
 		!strings.EqualFold(req.URL.Hostname(), "chatgpt.com") ||
 		req.URL.Path != "/backend-api/codex/responses" ||
 		req.Body == nil || req.GetBody == nil {
-		return nil
+		return false
 	}
 	mediaType, _, _ := strings.Cut(req.Header.Get("Content-Type"), ";")
 	if !strings.EqualFold(strings.TrimSpace(mediaType), "application/json") {
-		return nil
+		return false
 	}
 	if encoding := strings.TrimSpace(req.Header.Get("Content-Encoding")); encoding != "" && !strings.EqualFold(encoding, "identity") {
-		return nil
+		return false
+	}
+	switch policy.mode {
+	case config.CodexRequestCompressionOff:
+		return false
+	case config.CodexRequestCompressionBySize:
+		// 已知长度时直接按体积判定，避免为小请求做一次整包读取。
+		if req.ContentLength > 0 && req.ContentLength <= policy.minBytes {
+			return false
+		}
 	}
 	encoder, err := codexResponsesZstdEncoder()
 	if err != nil {
-		return fmt.Errorf("initialize Codex request compression: %w", err)
+		slog.Debug("codex_request_compression_unavailable", "error", err)
+		return false
 	}
 	replay, err := req.GetBody()
 	if err != nil {
-		return fmt.Errorf("read Codex request for compression: %w", err)
+		slog.Debug("codex_request_compression_replay_failed", "error", err)
+		return false
 	}
 	payload, err := io.ReadAll(replay)
 	_ = replay.Close()
 	if err != nil {
-		return fmt.Errorf("read Codex request for compression: %w", err)
+		slog.Debug("codex_request_compression_read_failed", "error", err)
+		return false
+	}
+	if policy.mode == config.CodexRequestCompressionBySize {
+		bodyLen := req.ContentLength
+		if bodyLen <= 0 {
+			bodyLen = int64(len(payload))
+		}
+		if bodyLen <= policy.minBytes {
+			return false
+		}
 	}
 	encoded := encoder.EncodeAll(payload, nil)
 	_ = req.Body.Close()
@@ -375,7 +422,7 @@ func compressCodexResponsesRequest(req *http.Request) error {
 	req.Header = req.Header.Clone()
 	req.Header.Del("Content-Length")
 	req.Header.Set("Content-Encoding", "zstd")
-	return nil
+	return true
 }
 
 type cancelOnCloseBody struct {

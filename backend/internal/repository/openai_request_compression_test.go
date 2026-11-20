@@ -3,6 +3,7 @@ package repository
 import (
 	"bytes"
 	"context"
+	"github.com/MACOS-DO/sub4api/internal/config"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -66,7 +67,7 @@ func TestCodexResponsesCompressionWireContract(t *testing.T) {
 				req.Header.Set("Content-Encoding", tc.encoding)
 			}
 			for range 2 {
-				resp, err := doUpstreamRequest(client, req)
+				resp, err := doUpstreamRequest(client, req, codexRequestCompression{mode: config.CodexRequestCompressionOn})
 				require.NoError(t, err)
 				_, err = io.Copy(io.Discard, resp.Body)
 				require.NoError(t, err)

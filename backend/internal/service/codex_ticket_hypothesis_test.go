@@ -70,7 +70,7 @@ func TestCodexHypothesisRunnerUsesNormalPathAndInjectsTicket(t *testing.T) {
 		require.Equal(t, chatgptCodexURL, request.URL.String())
 		require.Equal(t, buildCodexCLIUserAgent(codexHypothesisClientVersion), request.Header.Get("User-Agent"))
 		require.Equal(t, "codex_cli_rs", request.Header.Get("originator"))
-		require.Equal(t, codexHypothesisClientVersion, request.Header.Get("version"))
+		require.Empty(t, request.Header.Get("version"))
 		require.Equal(t, "Bearer secret", request.Header.Get("Authorization"))
 		require.Equal(t, "account-test", request.Header.Get("ChatGPT-Account-ID"))
 		if index < 3 {
@@ -264,7 +264,7 @@ func TestCodexHypothesisConcurrentNormalHeadersAndTicketInjection(t *testing.T) 
 	for _, request := range upstream.requests {
 		require.Equal(t, buildCodexCLIUserAgent(codexHypothesisClientVersion), request.Header.Get("User-Agent"))
 		require.Equal(t, "codex_cli_rs", request.Header.Get("originator"))
-		require.Equal(t, codexHypothesisClientVersion, request.Header.Get("version"))
+		require.Empty(t, request.Header.Get("version"))
 		if request.Header.Get(openAICodexTurnStateHeader) == "pinned-state" {
 			injected++
 			require.Equal(t, "session=pinned", request.Header.Get("Cookie"))
@@ -364,7 +364,7 @@ func TestCodexHypothesisReplayConcurrentMetadataAndTicket(t *testing.T) {
 		require.Equal(t, replay.InstallationID, request.Header.Get("x-codex-installation-id"))
 		require.Equal(t, buildCodexCLIUserAgent(codexHypothesisClientVersion), request.Header.Get("User-Agent"))
 		require.Equal(t, "codex_cli_rs", request.Header.Get("originator"))
-		require.Equal(t, "0.156.1", request.Header.Get("version"))
+		require.Empty(t, request.Header.Get("version"))
 		require.Empty(t, request.Header.Get("conversation_id"))
 		require.Equal(t, runner.sessionID, body.ClientMetadata["session_id"])
 		require.Equal(t, runner.sessionID, body.ClientMetadata["thread_id"])

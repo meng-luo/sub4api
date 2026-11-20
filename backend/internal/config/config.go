@@ -1047,6 +1047,94 @@ const (
 	ImageConcurrencyOverflowModeWait   = "wait"
 )
 
+// Codex 请求体压缩模式（gateway.codex.request_compression）。
+// 官方 Codex CLI 的 /backend-api/codex/responses 业务请求实测一律明文（45 KB ~ 31.7 MB
+// 均不带 Content-Encoding），因此压缩只是可选优化，默认只在超大请求上启用。
+const (
+	// CodexRequestCompressionOff: 永不压缩，逐字节复刻官方明文请求。
+	CodexRequestCompressionOff = "off"
+	// CodexRequestCompressionOn: 命中 Codex Responses 端点即压缩。
+	CodexRequestCompressionOn = "on"
+	// CodexRequestCompressionBySize: 请求体超过阈值才压缩（默认）。
+	CodexRequestCompressionBySize = "by_size"
+)
+
+// DefaultCodexRequestCompressionMinBytes by_size 模式的默认阈值（8 MiB，按未压缩 body 计）。
+const DefaultCodexRequestCompressionMinBytes int64 = 8 << 20
+
+// Codex turn metadata 的沙箱身份取值（gateway.codex_identity.sandbox / sandbox_mode）。
+const (
+	CodexSandboxSeatbelt = "seatbelt"
+	CodexSandboxNone     = "none"
+	// CodexSandboxAuto 按出站 User-Agent 的操作系统段自动选择：macOS → seatbelt，其余 → none。
+	// 这是默认值：sandbox 与 UA 自相矛盾（Windows UA + seatbelt）本身就是可判别指纹。
+	CodexSandboxAuto = "auto"
+
+	CodexSandboxModeReadOnly         = "read-only"
+	CodexSandboxModeWorkspaceWrite   = "workspace-write"
+	CodexSandboxModeDangerFullAccess = "danger-full-access"
+)
+
+// GatewayCodexConfig gateway.codex.* —— ChatGPT Codex 上游请求形态。
+type GatewayCodexConfig struct {
+	// RequestCompression 请求体压缩模式：off | on | by_size，默认 by_size。
+	RequestCompression string `mapstructure:"request_compression"`
+	// RequestCompressionMinBytes by_size 模式的阈值（按未压缩 body 字节数），默认 8 MiB。
+	RequestCompressionMinBytes int64 `mapstructure:"request_compression_min_bytes"`
+}
+
+// EffectiveRequestCompression 返回生效的压缩模式；空值/非法值按 by_size 处理，
+// 保证零值 Config（测试、工具手工构造）落在与 viper 默认一致的一侧。
+func (c GatewayCodexConfig) EffectiveRequestCompression() string {
+	switch mode := strings.ToLower(strings.TrimSpace(c.RequestCompression)); mode {
+	case CodexRequestCompressionOff, CodexRequestCompressionOn:
+		return mode
+	default:
+		return CodexRequestCompressionBySize
+	}
+}
+
+// EffectiveRequestCompressionMinBytes 返回生效的压缩阈值。
+func (c GatewayCodexConfig) EffectiveRequestCompressionMinBytes() int64 {
+	if c.RequestCompressionMinBytes <= 0 {
+		return DefaultCodexRequestCompressionMinBytes
+	}
+	return c.RequestCompressionMinBytes
+}
+
+// GatewayCodexIdentityConfig gateway.codex_identity.* —— ChatGPT 面出站身份细节。
+type GatewayCodexIdentityConfig struct {
+	// EmitVersionHeader 是否在 ChatGPT 推理面发送 version 头。
+	// 官方 Codex CLI 0.171.0 的出站请求不含该头，默认关闭。
+	EmitVersionHeader bool `mapstructure:"emit_version_header"`
+	// Sandbox 对应 turn metadata 的 sandbox 字段：auto | seatbelt | none，默认 auto。
+	Sandbox string `mapstructure:"sandbox"`
+	// SandboxMode 对应 turn metadata 的 sandbox_mode 字段：
+	// read-only | workspace-write | danger-full-access，默认 read-only。
+	SandboxMode string `mapstructure:"sandbox_mode"`
+}
+
+// EffectiveSandbox 返回生效的 sandbox 取值。显式配置 seatbelt / none 时以配置为准；
+// 空值或 auto 时返回 auto，由请求侧按 User-Agent 的操作系统段决定。
+func (c GatewayCodexIdentityConfig) EffectiveSandbox() string {
+	switch sandbox := strings.ToLower(strings.TrimSpace(c.Sandbox)); sandbox {
+	case CodexSandboxSeatbelt, CodexSandboxNone:
+		return sandbox
+	default:
+		return CodexSandboxAuto
+	}
+}
+
+// EffectiveSandboxMode 返回生效的 sandbox_mode 取值，空值按 read-only 处理。
+func (c GatewayCodexIdentityConfig) EffectiveSandboxMode() string {
+	switch mode := strings.ToLower(strings.TrimSpace(c.SandboxMode)); mode {
+	case CodexSandboxModeWorkspaceWrite, CodexSandboxModeDangerFullAccess:
+		return mode
+	default:
+		return CodexSandboxModeReadOnly
+	}
+}
+
 // GatewayConfig API网关相关配置
 type GatewayConfig struct {
 	// MinOutputTokens is the minimum max_output_tokens used when
@@ -1223,6 +1311,12 @@ type GatewayConfig struct {
 	// CNProviders: 国产 OpenAI 兼容供应商（kimi/zhipu/deepseek）的余额检测配置。
 	// 仅作用于 payg（按量付费）账号：周期探测余额，低于阈值则临时停调。
 	CNProviders GatewayCNProvidersConfig `mapstructure:"cn_providers"`
+
+	// Codex: ChatGPT Codex 上游请求形态（请求体压缩等）。
+	Codex GatewayCodexConfig `mapstructure:"codex"`
+
+	// CodexIdentity: ChatGPT 面出站身份细节（version 头开关、turn metadata 沙箱字段）。
+	CodexIdentity GatewayCodexIdentityConfig `mapstructure:"codex_identity"`
 }
 
 // GatewayGrokConfig holds Grok-specific gateway scheduling knobs.
@@ -2670,6 +2764,11 @@ func setDefaults() {
 	viper.SetDefault("gateway.gemini_debug_response_headers", false)
 	viper.SetDefault("gateway.gemini_cached_content_max_ttl_seconds", 86400)
 	viper.SetDefault("gateway.connection_pool_isolation", ConnectionPoolIsolationAccountProxy)
+	viper.SetDefault("gateway.codex.request_compression", CodexRequestCompressionBySize)
+	viper.SetDefault("gateway.codex.request_compression_min_bytes", DefaultCodexRequestCompressionMinBytes)
+	viper.SetDefault("gateway.codex_identity.emit_version_header", false)
+	viper.SetDefault("gateway.codex_identity.sandbox", CodexSandboxAuto)
+	viper.SetDefault("gateway.codex_identity.sandbox_mode", CodexSandboxModeReadOnly)
 	// HTTP 上游连接池配置（针对 5000+ 并发用户优化）
 	viper.SetDefault("gateway.max_idle_conns", 2560)          // 最大空闲连接总数（高并发场景可调大）
 	viper.SetDefault("gateway.max_idle_conns_per_host", 120)  // 每主机最大空闲连接（HTTP/2 场景默认）
@@ -3547,6 +3646,27 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.ImageConcurrency.MaxConcurrentRequests < 0 {
 		return fmt.Errorf("gateway.image_concurrency.max_concurrent_requests must be non-negative")
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Gateway.Codex.RequestCompression)) {
+	case "", CodexRequestCompressionOff, CodexRequestCompressionOn, CodexRequestCompressionBySize:
+	default:
+		return fmt.Errorf("gateway.codex.request_compression must be one of: %s/%s/%s",
+			CodexRequestCompressionOff, CodexRequestCompressionOn, CodexRequestCompressionBySize)
+	}
+	if c.Gateway.Codex.RequestCompressionMinBytes < 0 {
+		return fmt.Errorf("gateway.codex.request_compression_min_bytes must be non-negative")
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Gateway.CodexIdentity.Sandbox)) {
+	case "", CodexSandboxAuto, CodexSandboxSeatbelt, CodexSandboxNone:
+	default:
+		return fmt.Errorf("gateway.codex_identity.sandbox must be one of: %s/%s/%s",
+			CodexSandboxAuto, CodexSandboxSeatbelt, CodexSandboxNone)
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Gateway.CodexIdentity.SandboxMode)) {
+	case "", CodexSandboxModeReadOnly, CodexSandboxModeWorkspaceWrite, CodexSandboxModeDangerFullAccess:
+	default:
+		return fmt.Errorf("gateway.codex_identity.sandbox_mode must be one of: %s/%s/%s",
+			CodexSandboxModeReadOnly, CodexSandboxModeWorkspaceWrite, CodexSandboxModeDangerFullAccess)
 	}
 	switch strings.TrimSpace(c.Gateway.ImageConcurrency.OverflowMode) {
 	case "", ImageConcurrencyOverflowModeReject, ImageConcurrencyOverflowModeWait:

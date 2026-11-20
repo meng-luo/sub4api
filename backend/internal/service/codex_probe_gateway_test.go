@@ -84,7 +84,14 @@ func TestCodexProbeGatewayAccountAndFingerprintRewritesStayConsistent(t *testing
 			require.Empty(t, request.Header.Get("x-codex-installation-id"), "official /responses never sends the installation-id header")
 			require.Empty(t, request.Header.Get("session_id"), "official /responses never sends the underscored session header")
 			require.Equal(t, cm.Get("session_id").String(), gjson.GetBytes(encoded, "prompt_cache_key").String())
-			require.JSONEq(t, cm.Get("x-codex-turn-metadata").String(), request.Header.Get("x-codex-turn-metadata"))
+			// 出站 metadata 已按官方 payload 形状补齐（21 键），这里比对身份字段而不是整串。
+			headerMetadata := map[string]any{}
+			require.NoError(t, json.Unmarshal([]byte(request.Header.Get("x-codex-turn-metadata")), &headerMetadata))
+			bodyMetadata := map[string]any{}
+			require.NoError(t, json.Unmarshal([]byte(cm.Get("x-codex-turn-metadata").String()), &bodyMetadata))
+			for _, key := range []string{"installation_id", "session_id", "thread_id", "turn_id", "window_id"} {
+				require.Equal(t, bodyMetadata[key], headerMetadata[key], key)
+			}
 			require.NotEqual(t, headers.Get("session-id"), request.Header.Get("session-id"))
 			require.Equal(t, "probe challenge", gjson.GetBytes(encoded, "input.4.content.0.text").String())
 		})

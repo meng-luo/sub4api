@@ -237,10 +237,18 @@ func (runner *CodexHypothesisRunner) buildRequest(ctx context.Context, challenge
 	if err != nil || runner.options.Replay == nil {
 		return request, err
 	}
+	// 网关已在 buildUpstreamRequest 内按官方 payload 形状补齐 turn metadata
+	// （agent_name / sandbox / root_turn_id …），并写入 header 与 body 的 client_metadata。
+	// 重放快照里的 header 来自旧抓包（8 键），覆盖后会与 body 的 21 键对象不一致，
+	// 故先留下网关产出的值，覆盖后用权威值回填，保证两个投影逐字节相同。
+	normalizedTurnMetadata := request.Header.Get("x-codex-turn-metadata")
 	for name, values := range replayHeaders {
 		request.Header[name] = values
 	}
 	request.Header.Del("conversation_id")
+	if normalizedTurnMetadata != "" {
+		request.Header.Set("x-codex-turn-metadata", normalizedTurnMetadata)
+	}
 	if err := runner.checkReplayIdentity(request); err != nil {
 		return nil, err
 	}
@@ -276,11 +284,30 @@ func (runner *CodexHypothesisRunner) checkReplayIdentity(request *http.Request) 
 	if err := json.Unmarshal([]byte(metadata), &turn); err != nil {
 		return errors.New("invalid outbound replay turn metadata")
 	}
+	// 形状字段（agent_name / sandbox / root_turn_id …）由代理按官方 payload 补齐，
+	// 重放用的 header 快照来自更早的抓包，逐字节比对会误判；这里比对 turn metadata
+	// 的身份字段，语义与 client_metadata 扁平投影一致即可。
+	var bodyTurn struct {
+		SessionID      string `json:"session_id"`
+		ThreadID       string `json:"thread_id"`
+		TurnID         string `json:"turn_id"`
+		InstallationID string `json:"installation_id"`
+		WindowID       string `json:"window_id"`
+	}
+	if raw := body.ClientMetadata["x-codex-turn-metadata"]; raw != "" {
+		if err := json.Unmarshal([]byte(raw), &bodyTurn); err != nil {
+			return errors.New("invalid body turn metadata")
+		}
+	}
+	if bodyTurn.SessionID != turn.SessionID || bodyTurn.ThreadID != turn.ThreadID ||
+		bodyTurn.TurnID != turn.TurnID || bodyTurn.InstallationID != turn.InstallationID ||
+		bodyTurn.WindowID != turn.WindowID {
+		return errors.New("outbound replay headers and body identity differ")
+	}
 	if body.PromptCacheKey != runner.sessionID || body.ClientMetadata["session_id"] != runner.sessionID ||
 		body.ClientMetadata["thread_id"] != runner.sessionID || body.ClientMetadata["turn_id"] != turn.TurnID ||
 		body.ClientMetadata["x-codex-installation-id"] != runner.options.Replay.InstallationID ||
 		body.ClientMetadata["x-codex-window-id"] != runner.windowID ||
-		body.ClientMetadata["x-codex-turn-metadata"] != metadata ||
 		request.Header.Get("session_id") != runner.sessionID || request.Header.Get("session-id") != runner.sessionID ||
 		request.Header.Get("thread-id") != runner.sessionID || request.Header.Get("x-client-request-id") != runner.sessionID ||
 		request.Header.Get("x-codex-installation-id") != runner.options.Replay.InstallationID ||
@@ -298,7 +325,12 @@ func (runner *CodexHypothesisRunner) checkHeaders(request *http.Request, tickete
 		return errors.New("normal request path changed method, URL or Host")
 	}
 	if request.Header.Get("User-Agent") != buildCodexCLIUserAgent(codexHypothesisClientVersion) ||
-		request.Header.Get("originator") != openai.CodexDefaultOriginator || request.Header.Get("version") != codexHypothesisClientVersion {
+		request.Header.Get("originator") != openai.CodexDefaultOriginator {
+		return errors.New("outbound Codex identity does not match pinned version")
+	}
+	// version 头由 gateway.codex_identity.emit_version_header 控制：默认不出站
+	// （官方 Codex CLI 业务请求没有该头），打开时必须与固化的诊断版本一致。
+	if version := request.Header.Get("version"); version != "" && version != codexHypothesisClientVersion {
 		return errors.New("outbound Codex identity does not match pinned version")
 	}
 	runner.baselineMu.Lock()

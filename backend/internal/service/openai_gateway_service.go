@@ -571,6 +571,14 @@ func NewOpenAIGatewayService(
 	// 拿不到配置，故在此发布进程级开关快照。配置取反义，零值即「强制统一出口开启」。
 	if cfg != nil {
 		SetCodexIdentityEnforcementEnabled(!cfg.Gateway.DisableCodexIdentityEnforcement)
+		// 官方 Codex CLI 的业务请求不含 version 头，默认不出站；turn metadata 的
+		// sandbox / sandbox_mode 由同一族配置决定。两者都是纯函数收口点，拿不到配置，
+		// 故与身份开关一样在装配时发布进程级快照。
+		SetCodexEmitVersionHeader(cfg.Gateway.CodexIdentity.EmitVersionHeader)
+		SetCodexMetadataSandbox(
+			cfg.Gateway.CodexIdentity.EffectiveSandbox(),
+			cfg.Gateway.CodexIdentity.EffectiveSandboxMode(),
+		)
 	}
 	svc := &OpenAIGatewayService{
 		accountRepo:         accountRepo,

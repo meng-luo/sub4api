@@ -230,6 +230,23 @@ security:
 # 网关配置
 # =============================================================================
 gateway:
+  # Codex ChatGPT 面上游请求体的 zstd 压缩策略：off | on | by_size。
+  # 官方 Codex CLI 的业务请求一律明文（实测 45 KB ~ 31.7 MB 均不带 Content-Encoding），
+  # 因此默认 by_size：只有超过阈值的超大请求才压缩，普通请求逐字节复刻官方形态。
+  # Codex request body compression for the ChatGPT surface: off | on | by_size.
+  codex:
+    request_compression: by_size
+    request_compression_min_bytes: 8388608
+  # ChatGPT 面出站身份细节 / outbound identity details for the ChatGPT surface.
+  codex_identity:
+    # 官方业务请求不含 version 头，默认不发；上游策略回退时临时打开。
+    # Emit the version header (official clients do not send it).
+    emit_version_header: false
+    # turn metadata 的 sandbox：auto（按 UA 的 OS 派生）| seatbelt | none
+    # auto derives seatbelt on macOS and none elsewhere, keeping sandbox consistent with UA.
+    sandbox: auto
+    # turn metadata 的 sandbox_mode：read-only | workspace-write | danger-full-access
+    sandbox_mode: read-only
   # Minimum max_output_tokens when converting Chat Completions or Anthropic requests to Responses (minimum 16, default 128)
   # Chat Completions 或 Anthropic 请求转换为 Responses 时的最小 max_output_tokens（最小 16，默认 128）
   min_output_tokens: 128

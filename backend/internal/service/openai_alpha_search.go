@@ -255,10 +255,14 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchResponsesWebSearchRequest(c
 		req.Header.Set("X-Codex-Turn-Metadata", turnMetadata)
 	}
 	canonical := resolveCodexOutboundIdentity("")
-	if version := openAIAlphaSearchInboundHeader(c, "Version"); version != "" {
-		req.Header.Set("Version", version)
-	} else {
-		req.Header.Set("Version", canonical.version)
+	// version 默认不出站：官方 Codex CLI 的 ChatGPT 面业务请求不含该头，
+	// 开关打开（gateway.codex_identity.emit_version_header）时保持旧线序。
+	if codexEmitVersionHeader.Load() {
+		if version := openAIAlphaSearchInboundHeader(c, "Version"); version != "" {
+			req.Header.Set("Version", version)
+		} else {
+			req.Header.Set("Version", canonical.version)
+		}
 	}
 	if originator := openAIAlphaSearchInboundHeader(c, "Originator"); originator != "" {
 		req.Header.Set("Originator", originator)
@@ -401,10 +405,12 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchRequest(ctx context.Context
 		}
 		applyCodexAccountIdentityHeaders(req.Header, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
 		canonical := resolveCodexOutboundIdentity("")
-		if version := openAIAlphaSearchInboundHeader(c, "Version"); version != "" {
-			req.Header.Set("Version", version)
-		} else {
-			req.Header.Set("Version", canonical.version)
+		if codexEmitVersionHeader.Load() {
+			if version := openAIAlphaSearchInboundHeader(c, "Version"); version != "" {
+				req.Header.Set("Version", version)
+			} else {
+				req.Header.Set("Version", canonical.version)
+			}
 		}
 		if originator := openAIAlphaSearchInboundHeader(c, "Originator"); originator != "" {
 			req.Header.Set("Originator", originator)

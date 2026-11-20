@@ -12,11 +12,14 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf16"
 
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
+
+	"github.com/MACOS-DO/sub4api/internal/config"
 )
 
 // Turn metadata is also used as an HTTP header, including when carried in WS JSON.
@@ -55,6 +58,8 @@ var codexTurnMetadataKeyOrder = [...]string{
 	"turn_started_at_unix_ms",
 	"history_ingest_requested",
 	"analytics_enabled",
+	// model 是 Codex 0.171.0 实测 payload 的最后一个声明字段（排在 analytics_enabled 之后）。
+	"model",
 	"compaction",
 }
 
@@ -299,11 +304,20 @@ func normalizeCodexRequestMetadata(body []byte, headers http.Header, account *Ac
 	if err != nil {
 		return body, false, err
 	}
-	changed, err := normalizeCodexClientMetadata(cm, headers, HasCompactionTriggerInInput(body))
+	// 形状字段（agent_name / root_turn_id / sandbox 等）必须在 defaults 之后、
+	// normalize 之前补齐：defaults 产出 ID 类字段，normalize 负责扁平投影与序列化。
+	// isCompact 与 normalize 取同一判据，保证 request_kind 与 turn_trigger 联动一致。
+	compactionTrigger := HasCompactionTriggerInInput(body)
+	shapeChanged, err := ensureCodexMetadataShapeDefaults(
+		decodeCodexClientMetadataTurnMetadata(cm, headers), cm, body, account, compactionTrigger)
 	if err != nil {
 		return body, false, err
 	}
-	changed = changed || defaultsChanged
+	changed, err := normalizeCodexClientMetadata(cm, headers, compactionTrigger)
+	if err != nil {
+		return body, false, err
+	}
+	changed = changed || defaultsChanged || shapeChanged
 	if !changed {
 		return body, false, nil
 	}
@@ -320,21 +334,7 @@ func normalizeCodexRequestMetadata(body []byte, headers http.Header, account *Ac
 }
 
 func normalizeCodexClientMetadata(cm map[string]any, headers http.Header, isCompact bool) (bool, error) {
-	metadata := map[string]any{}
-	if raw, ok := cm[openAIWSTurnMetadataHeader].(string); ok {
-		if decoded, err := decodeCodexTurnMetadata(raw); err == nil && decoded != nil {
-			metadata = decoded
-		}
-	}
-	if raw := headers.Get(openAIWSTurnMetadataHeader); raw != "" {
-		if decoded, err := decodeCodexTurnMetadata(raw); err == nil {
-			for key, value := range decoded {
-				if _, exists := metadata[key]; !exists {
-					metadata[key] = value
-				}
-			}
-		}
-	}
+	metadata := decodeCodexClientMetadataTurnMetadata(cm, headers)
 	changed := false
 	set := func(values map[string]any, key string, value any) {
 		if current, exists := values[key]; exists && current == value {
@@ -353,6 +353,9 @@ func normalizeCodexClientMetadata(cm map[string]any, headers http.Header, isComp
 		{"thread_id", "thread_id", "thread-id"},
 		{"turn_id", "turn_id", "turn-id"},
 		{"window_id", "x-codex-window-id", "x-codex-window-id"},
+		// root_turn_id 只存在于 turn metadata 与 client_metadata，官方没有对应的 HTTP 头，
+		// header 名为空表示只做扁平投影（下方 headers.Set 对空名会跳过）。
+		{"root_turn_id", "root_turn_id", ""},
 	} {
 		value, _ := metadata[field.metadata].(string)
 		if value == "" {
@@ -413,23 +416,7 @@ func ensureCodexClientMetadataDefaults(cm map[string]any, headers http.Header, b
 	if cm == nil || account == nil {
 		return false, nil
 	}
-	metadata := map[string]any{}
-	if raw, ok := cm[openAIWSTurnMetadataHeader].(string); ok && strings.TrimSpace(raw) != "" {
-		if decoded, err := decodeCodexTurnMetadata(raw); err == nil && decoded != nil {
-			metadata = decoded
-		}
-	}
-	if headers != nil {
-		if raw := headers.Get(openAIWSTurnMetadataHeader); strings.TrimSpace(raw) != "" {
-			if decoded, err := decodeCodexTurnMetadata(raw); err == nil {
-				for key, value := range decoded {
-					if _, exists := metadata[key]; !exists {
-						metadata[key] = value
-					}
-				}
-			}
-		}
-	}
+	metadata := decodeCodexClientMetadataTurnMetadata(cm, headers)
 	changed := false
 	set := func(values map[string]any, key, value string) string {
 		if strings.TrimSpace(value) == "" {
@@ -565,6 +552,174 @@ func ensureCodexClientMetadataDefaults(cm map[string]any, headers http.Header, b
 	return changed, nil
 }
 
+// turn metadata 的 sandbox / sandbox_mode 来自 gateway.codex_identity.*。
+// 合成逻辑跑在 HTTP 与 WS 共用的纯函数里，拿不到配置，故与身份开关一样由持有配置的
+// 服务在构造时发布进程级快照（默认 auto / read-only）。
+var (
+	codexMetadataShapeMu     sync.RWMutex
+	codexMetadataSandbox     = config.CodexSandboxAuto
+	codexMetadataSandboxMode = config.CodexSandboxModeReadOnly
+)
+
+// SetCodexMetadataSandbox 发布 turn metadata 的沙箱字段快照。
+// sandbox 允许 auto：此时按每个请求的 User-Agent 操作系统段决定（macOS → seatbelt，
+// 其余 → none），避免出现「UA 声明 Windows 却上报 seatbelt」这种自相矛盾的组合。
+func SetCodexMetadataSandbox(sandbox, sandboxMode string) {
+	identity := config.GatewayCodexIdentityConfig{Sandbox: sandbox, SandboxMode: sandboxMode}
+	codexMetadataShapeMu.Lock()
+	defer codexMetadataShapeMu.Unlock()
+	codexMetadataSandbox = identity.EffectiveSandbox()
+	codexMetadataSandboxMode = identity.EffectiveSandboxMode()
+}
+
+func codexMetadataSandboxSnapshot() (string, string) {
+	codexMetadataShapeMu.RLock()
+	defer codexMetadataShapeMu.RUnlock()
+	return codexMetadataSandbox, codexMetadataSandboxMode
+}
+
+// resolveCodexSandbox 把 auto 解析成具体取值：只有 macOS 才有 seatbelt 沙箱机制，
+// 其余平台一律 none。显式配置的 seatbelt / none 不参与解析。
+func resolveCodexSandbox(configured, userAgent string) string {
+	if configured != config.CodexSandboxAuto {
+		return configured
+	}
+	ua := strings.ToLower(strings.TrimSpace(userAgent))
+	switch {
+	case strings.Contains(ua, "mac os"), strings.Contains(ua, "macos"), strings.Contains(ua, "darwin"):
+		return config.CodexSandboxSeatbelt
+	default:
+		return config.CodexSandboxNone
+	}
+}
+
+// codexOutboundUserAgent 返回本次请求实际出站的 User-Agent：账号级自定义 UA 优先，
+// 否则用网关规范 UA（与 enforceCodexIdentityHeadersWithUA 的取值链一致）。
+func codexOutboundUserAgent(account *Account) string {
+	if account != nil {
+		if ua := strings.TrimSpace(account.GetOpenAIUserAgent()); ua != "" {
+			return ua
+		}
+	}
+	return strings.TrimSpace(codexCanonicalUserAgent())
+}
+
+// decodeCodexClientMetadataTurnMetadata 从 client_metadata 与传输头还原 turn metadata：
+// body 里的内嵌对象是权威来源，缺失的键才用 transport header 补齐。
+func decodeCodexClientMetadataTurnMetadata(cm map[string]any, headers http.Header) map[string]any {
+	metadata := map[string]any{}
+	if raw, ok := cm[openAIWSTurnMetadataHeader].(string); ok && strings.TrimSpace(raw) != "" {
+		if decoded, err := decodeCodexTurnMetadata(raw); err == nil && decoded != nil {
+			metadata = decoded
+		}
+	}
+	if headers != nil {
+		if raw := headers.Get(openAIWSTurnMetadataHeader); strings.TrimSpace(raw) != "" {
+			if decoded, err := decodeCodexTurnMetadata(raw); err == nil {
+				for key, value := range decoded {
+					if _, exists := metadata[key]; !exists {
+						metadata[key] = value
+					}
+				}
+			}
+		}
+	}
+	return metadata
+}
+
+// ensureCodexMetadataShapeDefaults 补齐官方 CodexTurnMetadataPayload 的形状字段。
+// 依据 Codex CLI 0.171.0 实测（21 键），必须在 ensureCodexClientMetadataDefaults
+// 之后、normalizeCodexClientMetadata 之前调用：前者产出 ID 类字段（turn_id 等），
+// 后者负责 client_metadata 扁平投影与最终序列化。补齐结果直接回写
+// cm[x-codex-turn-metadata]，后续 normalize 解码后即可看到这些键。
+//
+// 已存在的键一律不覆盖：真实 CLI 上报的取值是权威来源，代理只补它没给的形状字段。
+func ensureCodexMetadataShapeDefaults(metadata map[string]any, cm map[string]any, body []byte, account *Account, isCompact bool) (bool, error) {
+	if metadata == nil {
+		return false, nil
+	}
+	changed := false
+	setDefault := func(key string, value any) {
+		if _, exists := metadata[key]; exists {
+			return
+		}
+		metadata[key] = value
+		changed = true
+	}
+	// parent_turn_id 存在即视为续接回合（--resume / 派生子代理的形态）。
+	_, hasParentTurn := metadata["parent_turn_id"]
+	setDefault("agent_name", "/root")
+	if hasParentTurn {
+		setDefault("history_initialization", "resume")
+	} else {
+		setDefault("history_initialization", "new")
+	}
+	turnID := firstNonEmptyString(metadata["turn_id"], cm["turn_id"])
+	rootTurnID := turnID
+	if parentTurnID := firstNonEmptyString(metadata["parent_turn_id"]); parentTurnID != "" {
+		// 代理看不到父回合的 root，父回合即其自身时 root_turn_id == parent_turn_id。
+		rootTurnID = parentTurnID
+	}
+	if rootTurnID != "" {
+		setDefault("root_turn_id", rootTurnID)
+	}
+	setDefault("thread_source", "user")
+	// 压缩回合的判定不能只看 isCompact：真实客户端的原生压缩请求既不带
+	// compaction_trigger item、也不走 legacy 端点，只在 metadata 里带 compaction 对象
+	// （request_kind=compaction、无 model）。若只认 isCompact，这类请求会被误判成普通
+	// 回合，从而被补上 model 与 turn_trigger=exec，与客户端自报的形状自相矛盾。
+	compactionTurn := isCompact
+	if _, hasCompaction := metadata["compaction"]; hasCompaction {
+		compactionTurn = true
+	}
+	if kind, _ := metadata["request_kind"].(string); kind == "compaction" {
+		compactionTurn = true
+	}
+	// turn_trigger 与 request_kind 联动：压缩回合是 compaction，常规回合是 exec
+	// （实测 `codex exec` 的取值，旧文档写的 turn 是错的）。
+	if compactionTurn {
+		setDefault("turn_trigger", "compaction")
+	} else {
+		setDefault("turn_trigger", "exec")
+	}
+	sandbox, sandboxMode := codexMetadataSandboxSnapshot()
+	userAgent := codexOutboundUserAgent(account)
+	sandbox = resolveCodexSandbox(sandbox, userAgent)
+	if _, exists := metadata["sandbox"]; !exists {
+		metadata["sandbox"] = sandbox
+		changed = true
+	}
+	setDefault("sandbox_mode", sandboxMode)
+	setDefault("auto_review_enabled", false)
+	setDefault("node_repl_auto_review_required", false)
+	// 实测值：node_repl_disabled=false（旧文档写的 true 与官方实现相反）。
+	setDefault("node_repl_disabled", false)
+	setDefault("analytics_enabled", true)
+	// 实测：正常回合末尾是 model；compaction 回合用 compaction 对象替换 model，
+	// 即使 body 里仍有 model（0.171.0 抓包 001/003 对照）。代理不合成 compaction
+	// 对象（其枚举未穷尽），但至少不能给压缩回合多写 model。
+	if !compactionTurn {
+		if model := codexMetadataModel(body); model != "" {
+			setDefault("model", model)
+		}
+	}
+	if !changed {
+		return false, nil
+	}
+	raw, err := marshalCodexTurnMetadata(metadata)
+	if err != nil {
+		return false, err
+	}
+	cm[openAIWSTurnMetadataHeader] = string(raw)
+	return true, nil
+}
+
+// codexMetadataModel 取请求体里的实际模型，不用下游别名（别名是代理侧概念，
+// 官方 metadata 里的 model 是上游模型名）；body 未声明模型时不写该键。
+func codexMetadataModel(body []byte) string {
+	return strings.TrimSpace(gjson.GetBytes(body, "model").String())
+}
+
 // deriveCodexFallbackSessionID 为完全未携带会话信号（无 header、无
 // prompt_cache_key、无 metadata）的客户端合成 session_id。旧实现只按
 // account.ID 派生，同一账号下所有互不相干的对话塌缩成同一个 session_id，
@@ -620,11 +775,16 @@ func normalizeCodexRequestMetadataMap(payload map[string]any, headers http.Heade
 	if err != nil {
 		return err
 	}
+	shapeChanged, err := ensureCodexMetadataShapeDefaults(
+		decodeCodexClientMetadataTurnMetadata(cm, headers), cm, body, account, isCompact)
+	if err != nil {
+		return err
+	}
 	changed, err := normalizeCodexClientMetadata(cm, headers, isCompact)
 	if err != nil {
 		return err
 	}
-	if defaultsChanged || changed {
+	if defaultsChanged || shapeChanged || changed {
 		payload["client_metadata"] = cm
 	}
 	return nil

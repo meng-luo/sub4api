@@ -1583,9 +1583,9 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 		apiKeyID := getAPIKeyIDFromContext(c)
 		if legacyCompactRequest {
 			req.Header.Set("accept", "application/json")
-			if req.Header.Get("version") == "" {
-				req.Header.Set("version", CodexCanonicalClientVersion())
-			}
+			// legacy /responses/compact 是 unary JSON 老端点，官方是否携带 version 未实测；
+			// 与业务面共用同一开关（默认不发，需要旧线序时打开 emit_version_header）。
+			applyCodexCompactVersionHeader(req.Header)
 			compactSession := resolveOpenAICompactSessionID(c)
 			req.Header.Set("session_id", isolateOpenAIUpstreamSessionID(apiKeyID, codexAccountIdentitySource(c, account), compactSession))
 		} else {

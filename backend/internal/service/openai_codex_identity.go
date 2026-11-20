@@ -59,6 +59,47 @@ func SetCodexIdentityEnforcementEnabled(enabled bool) {
 	codexIdentityEnforcement.Store(enabled)
 }
 
+// codexEmitVersionHeader 控制 ChatGPT 推理面是否发送 version 头。
+// 官方 Codex CLI 0.171.0 的 POST /backend-api/codex/responses 出站请求恰好 15 个头，
+// 其中没有 version（实测 45 KB ~ 31.7 MB 请求体均不带该头），因此默认不发送。
+// 该头只在 issue #3901 的版本门槛场景下被上游校验，由
+// gateway.codex_identity.emit_version_header 在上游策略回退时重新打开。
+//
+// 与 codexIdentityEnforcement 同为进程级快照：ensure/enforce/project 都是纯函数收口点，
+// 无法在热路径注入配置，故由持有配置的服务在构造时发布。
+var codexEmitVersionHeader = func() *atomic.Bool {
+	v := &atomic.Bool{}
+	v.Store(false)
+	return v
+}()
+
+// SetCodexEmitVersionHeader 发布「ChatGPT 推理面是否发送 version 头」的进程级开关。
+func SetCodexEmitVersionHeader(enabled bool) {
+	codexEmitVersionHeader.Store(enabled)
+}
+
+// applyCodexCompactVersionHeader 处理 legacy /responses/compact 的 version 头。
+// 该端点不走 projectCodexOutboundHeaders 收口，因此在这里单独对齐业务面的开关：
+// 关闭时连客户端透传的值一并削平，打开时按规范身份补齐。
+func applyCodexCompactVersionHeader(h http.Header) {
+	if !codexEmitVersionHeader.Load() {
+		h.Del("version")
+		return
+	}
+	if strings.TrimSpace(h.Get("version")) == "" {
+		h.Set("version", CodexCanonicalClientVersion())
+	}
+}
+
+// setCodexVersionHeader 按开关写入 version 头。关闭时这里不写、也不改写客户端
+// 自报的值——ChatGPT 业务 HTTP 路径的削平统一由 projectCodexOutboundHeaders 负责。
+func setCodexVersionHeader(h http.Header, version string) {
+	if !codexEmitVersionHeader.Load() {
+		return
+	}
+	h.Set("version", version)
+}
+
 // codexCanonicalUserAgentResolver 返回当前生效的规范 Codex User-Agent（后台设置 / 自动同步版本号）。
 // 由 SettingService 在装配时注入；解析器内部自带 TTL 缓存，热路径不触库。
 type codexCanonicalUserAgentResolver func() string
@@ -187,8 +228,9 @@ func ensureCodexIdentityHeaders(h http.Header) {
 	if strings.TrimSpace(h.Get("originator")) == "" {
 		h.Set("originator", identity.originator)
 	}
+	// version 默认不出站（官方业务请求不含该头）；开关打开时仍按规范身份补齐。
 	if strings.TrimSpace(h.Get("version")) == "" {
-		h.Set("version", identity.version)
+		setCodexVersionHeader(h, identity.version)
 	}
 	h.Set("OpenAI-Beta", "responses=experimental")
 }
@@ -233,7 +275,10 @@ func enforceCodexIdentityHeadersWithUA(h http.Header, overrideUA string) {
 	identity := resolveCodexOutboundIdentity(overrideUA)
 	h.Set("user-agent", identity.userAgent)
 	h.Set("originator", identity.originator)
-	h.Set("version", identity.version)
+	// version 只在显式开关下写出：官方 Codex CLI 的业务请求没有这个头。
+	// 客户端自报的旧值不在这里删——HTTP 业务路径由 projectCodexOutboundHeaders 削平，
+	// 而 models 列表 / search / 探针等路径显式写入的 version 不受影响。
+	setCodexVersionHeader(h, identity.version)
 }
 
 // pairCodexIdentityHeaders 是关闭强制统一后的兜底收口：保留客户端真实身份，
@@ -243,12 +288,12 @@ func pairCodexIdentityHeaders(h http.Header) {
 	if !ok {
 		identity := resolveCodexOutboundIdentity("")
 		originator, pairedUA = identity.originator, identity.userAgent
-		h.Set("version", identity.version)
+		setCodexVersionHeader(h, identity.version)
 	}
 	h.Set("user-agent", pairedUA)
 	h.Set("originator", originator)
 	if v := strings.TrimSpace(h.Get("version")); v != "" && CompareVersions(v, codexUpstreamMinVersion) < 0 {
-		h.Set("version", resolveCodexOutboundIdentity("").version)
+		setCodexVersionHeader(h, resolveCodexOutboundIdentity("").version)
 	}
 }
 
@@ -281,6 +326,24 @@ var codexHTTPNonOfficialHeaders = [...]string{
 	"accept-language",
 }
 
+// codexHTTPNonOfficialHeadersKeepVersion 是 version 开关打开时的收口名单；
+// 关闭时额外削平 version（官方业务请求没有该头）。两份名单在编译期固化，
+// 热路径只做一次切片选择，避免每请求分配。
+var (
+	codexHTTPNonOfficialHeadersKeepVersion = codexHTTPNonOfficialHeaders[:]
+	codexHTTPNonOfficialHeadersDropVersion = append(
+		append([]string(nil), codexHTTPNonOfficialHeaders[:]...), "version")
+)
+
+// codexHTTPProjectedNonOfficialHeaders 返回 HTTP 业务路径实际要削平的名单：
+// version 是否在名单内取决于进程级开关（关闭时连客户端自报的 version 也一并删除）。
+func codexHTTPProjectedNonOfficialHeaders() []string {
+	if codexEmitVersionHeader.Load() {
+		return codexHTTPNonOfficialHeadersKeepVersion
+	}
+	return codexHTTPNonOfficialHeadersDropVersion
+}
+
 // codexWSNonOfficialHeaders 是 WS 握手上官方不发的同名子集。WS 与 HTTP 的差异
 // 必须保留：OpenAI-Beta 与 x-client-request-id 是官方 WS 握手**确实发送**的
 // （client.rs:1314-1330），故不在 WS 列表内。
@@ -308,7 +371,7 @@ func projectCodexOutboundHeaders(h http.Header, websocket bool) {
 	if websocket {
 		nonOfficial = codexWSNonOfficialHeaders[:]
 	} else {
-		nonOfficial = codexHTTPNonOfficialHeaders[:]
+		nonOfficial = codexHTTPProjectedNonOfficialHeaders()
 	}
 	for _, name := range nonOfficial {
 		deleteHeaderAllForms(h, name)
