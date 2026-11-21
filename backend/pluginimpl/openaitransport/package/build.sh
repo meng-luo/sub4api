@@ -28,20 +28,15 @@ if [ ${#targets[@]} -eq 0 ]; then
   esac
 fi
 
-hash_sha256() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | awk '{print $1}'
-  else
-    shasum -a 256 "$1" | awk '{print $1}'
-  fi
-}
-
-command -v zip >/dev/null 2>&1 || { echo "缺少 zip 命令，无法打包" >&2; exit 1; }
-command -v python3 >/dev/null 2>&1 || { echo "缺少 python3，无法生成清单" >&2; exit 1; }
-
 rm -rf "${WORK}"
 mkdir -p "${WORK}/runtimes" "${WORK}/ui"
 cp "${HERE}/ui/index.html" "${WORK}/ui/index.html"
+
+# 使用 python3 计算 sha256，不依赖 linux 的 sha256sum 或 macos 的 shasum。
+# 构建阶段已安装 python3，确保在 Alpine / macOS 下均可用。
+hash_file() {
+  python3 -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$1"
+}
 
 runtimes_json=""
 files_json=""
@@ -54,14 +49,14 @@ for t in "${targets[@]}"; do
   echo "==> building ${t}"
   ( cd "${BACKEND}" && GOOS="${os}" GOARCH="${arch}" CGO_ENABLED=0 \
       go build -trimpath -ldflags "-s -w" -o "${WORK}/${rel}" ./cmd/openai-transport-plugin )
-  hash=$(hash_sha256 "${WORK}/${rel}")
+  hash=$(hash_file "${WORK}/${rel}")
   runtimes_json+=$([ -z "${runtimes_json}" ] && echo "" || echo ",")
   runtimes_json+="\"${t}\":{\"path\":\"${rel}\"}"
   files_json+=$([ -z "${files_json}" ] && echo "" || echo ",")
   files_json+="\"${rel}\":\"${hash}\""
 done
 
-ui_hash=$(hash_sha256 "${WORK}/ui/index.html")
+ui_hash=$(hash_file "${WORK}/ui/index.html")
 files_json+=",\"ui/index.html\":\"${ui_hash}\""
 
 manifest="${WORK}/manifest.json"
