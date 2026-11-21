@@ -102,24 +102,21 @@ RUN --mount=type=cache,id=sub2api-gomod,target=/go/pkg/mod \
 # Build the self-hosted OpenAI transport plugin package (.s2plugin) for the same
 # target arch, so the image ships an installable artifact instead of requiring a
 # manual build on the deploy host.
-# 签名是可选步骤：--build-arg PLUGIN_SIGN=1 且 --secret id=plugin_signing_key,src=<ed25519 私钥>
-# 时产出可直接在 plugins.trusted_publishers 下安装的包；默认（PLUGIN_SIGN=0）为未签名包，
-# 只能配合 plugins.allow_unsigned 在调试环境安装。
-# sign.py 依赖 python-cryptography（构建阶段已装，最终镜像不含 python）。
+# 签名是可选步骤：--build-arg PLUGIN_SIGN=1 且传入私钥时产出已签名包；
+# 默认（PLUGIN_SIGN=0）为未签名包。sign.py 依赖 python-cryptography（构建阶段已装）。
 #
-# PLUGIN_SIGN 必须显式置 1 才会签名：BuildKit 的 secret 内容不参与层缓存键，
-# 只挂 secret 而重建时可能命中「未签名」的旧层而静默给出未签名包。把开关写进
-# 命令行让缓存键随签名意图变化；置 1 却拿不到私钥时直接失败，不静默降级。
+# PLUGIN_SIGN 必须显式置 1 才会签名；置 1 却拿不到私钥时直接失败，不静默降级。
 ARG PLUGIN_VERSION=0.1.0
 ARG PLUGIN_SIGN=0
-RUN --mount=type=secret,id=plugin_signing_key,required=false \
-    --mount=type=cache,id=sub2api-gomod,target=/go/pkg/mod \
+ARG PLUGIN_SIGNING_KEY=
+RUN --mount=type=cache,id=sub2api-gomod,target=/go/pkg/mod \
     --mount=type=cache,id=sub2api-gobuild,target=/root/.cache/go-build \
     if [ "${PLUGIN_SIGN}" = "1" ]; then \
-        if [ ! -s /run/secrets/plugin_signing_key ]; then \
-            echo "PLUGIN_SIGN=1 但未提供 build secret plugin_signing_key" >&2; exit 1; \
+        if [ -z "${PLUGIN_SIGNING_KEY}" ]; then \
+            echo "PLUGIN_SIGN=1 但未提供 PLUGIN_SIGNING_KEY" >&2; exit 1; \
         fi; \
-        export SIGN_KEY=/run/secrets/plugin_signing_key; \
+        echo "${PLUGIN_SIGNING_KEY}" | base64 -d > /tmp/.sign_key; \
+        export SIGN_KEY=/tmp/.sign_key; \
     fi; \
     VERSION="${PLUGIN_VERSION}" OUT=/app/plugin-dist \
     bash ./pluginimpl/openaitransport/package/build.sh "linux-${TARGETARCH:-$(go env GOARCH)}"
