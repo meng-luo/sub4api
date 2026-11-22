@@ -94,7 +94,7 @@ func TestRunCodexNativeDiagnosticSuccessUsesAccountToken(t *testing.T) {
 		var err error
 		body, err = io.ReadAll(req.Body)
 		require.NoError(t, err)
-		assertCodexProbeIdentity(t, body, req.Header)
+		assertCodexOutboundProbeIdentity(t, body, req.Header)
 		return challengeHarvestResponse(t, streamed), nil
 	}}
 	svc, account, _ := challengeHarvestService(t, upstream)

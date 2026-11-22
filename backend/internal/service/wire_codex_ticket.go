@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// Construct the harvester only after history and proxy settings are available.
+// Prepare the harvester before the server starts the outbound plugin manager.
 func ProvideOpenAIGatewayService(
 	accountRepo AccountRepository,
 	usageLogRepo UsageLogRepository,
@@ -43,7 +43,6 @@ func ProvideOpenAIGatewayService(
 		_ = settingService.LoadModelTraceBank(ctx)
 		cancel()
 	}
-	s.StartOpenAICodexTicketHarvester()
 	return s
 }
 

@@ -2,7 +2,6 @@ package service
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,7 +17,7 @@ import (
 
 	"github.com/MACOS-DO/sub4api/internal/config"
 	"github.com/MACOS-DO/sub4api/internal/pkg/logger"
-	"github.com/MACOS-DO/sub4api/internal/pkg/openai"
+	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
 )
@@ -26,7 +25,6 @@ import (
 const (
 	openAICodexTicketExtraKeyPrefix  = "codex_turn_ticket:"
 	CodexTicketReadyModelsExtraKey   = "codex_ticket_ready_models"
-	openAICodexAstraMinVersion       = "0.153.4"
 	openAICodexTicketStatePrefix     = "gAAAAA"
 	openAICodexTicketDefaultModel    = "gpt-6-astra"
 	openAICodexTicketDefaultSolModel = "gpt-5.6-sol"
@@ -274,6 +272,10 @@ func (s *OpenAIGatewayService) applyOpenAICodexTicket(ctx context.Context, accou
 }
 
 func (s *OpenAIGatewayService) applyOpenAICodexTicketWithGeneration(ctx context.Context, account *Account, model string, h http.Header) (*openAICodexTicket, error) {
+	// A new probe must work before any ticket exists and must not reuse an old one.
+	if probe, _ := ctx.Value(codexTicketProbeContextKey{}).(bool); probe {
+		return nil, nil
+	}
 	if s == nil || h == nil || !isOpenAICodexTicketAccount(account) || !s.openAICodexTicketEnabledContext(ctx) {
 		return nil, nil
 	}
@@ -440,6 +442,8 @@ type codexTicketProbeResult struct {
 	errorCode, errorMessage string
 }
 
+type codexTicketProbeContextKey struct{}
+
 func (s *OpenAIGatewayService) fireOpenAICodexTicketProbe(ctx context.Context, account *Account, token, model, proxyURL string, challenge ModelTraceChallenge, attemptTimeout time.Duration) (codexTicketProbeResult, error) {
 	var result codexTicketProbeResult
 	attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
@@ -448,25 +452,38 @@ func (s *OpenAIGatewayService) fireOpenAICodexTicketProbe(ctx context.Context, a
 	if err != nil {
 		return result, err
 	}
-	req, err := http.NewRequestWithContext(attemptCtx, http.MethodPost, chatgptCodexURL, bytes.NewReader(body))
+	attemptCtx = context.WithValue(attemptCtx, codexTicketProbeContextKey{}, true)
+	inbound, err := http.NewRequestWithContext(attemptCtx, http.MethodPost, "/v1/responses", nil)
 	if err != nil {
 		return result, err
 	}
-	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAIHarvest))
-	req.Close = true
-	req.Host = "chatgpt.com"
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("OpenAI-Beta", "responses=experimental")
-	for name, values := range replayHeaders {
-		req.Header[name] = values
-	}
-	if err := resolveAndSetOpenAIChatGPTAccountHeaders(attemptCtx, s.accountRepo, req.Header, account); err != nil {
+	inbound.Header = replayHeaders
+	c := &gin.Context{Request: inbound}
+	const probeAPIKeyID = 0
+	session := codexClientSessionID(c)
+	promptCacheKey := gjson.GetBytes(body, "prompt_cache_key").String()
+	body, _, err = applyCodexAccountIdentityClientMetadataRaw(body, account, probeAPIKeyID, session)
+	if err != nil {
 		return result, err
 	}
-	applyOpenAICodexTicketHarvestIdentity(req.Header, model)
-	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
+	if fingerprint := resolveCodexFingerprintIDsForCaller(account, replayHeaders, probeAPIKeyID); fingerprint != nil {
+		body, _, err = applyCodexFingerprintClientMetadataRaw(body, fingerprint)
+		if err != nil {
+			return result, err
+		}
+		stageCodexFingerprintIDs(c, fingerprint)
+	}
+	req, err := s.buildUpstreamRequest(attemptCtx, c, account, body, token, true, promptCacheKey, true)
+	if err != nil {
+		return result, err
+	}
+	if proxyURL != "" {
+		// The built-in transport needs a fresh connection for proxies that rotate
+		// egress on connect. A bound plugin uses its own gateway transport policy.
+		req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAIHarvest))
+		req.Close = true
+	}
+	resp, err := s.doOpenAIUpstreamOnce(req, proxyURL, account)
 	if err != nil {
 		return result, err
 	}
@@ -545,22 +562,6 @@ func extractOpenAICodexResponseCookies(h http.Header) string {
 		pairs = append(pairs, item.Name+"="+item.Value)
 	}
 	return strings.Join(pairs, "; ")
-}
-
-func applyOpenAICodexTicketHarvestIdentity(h http.Header, model string) {
-	ensureCodexIdentityHeaders(h)
-	enforceCodexIdentityHeaders(h)
-	version := strings.TrimSpace(h.Get("version"))
-	if needsOpenAICodexAstraVersion(model) && (version == "" || CompareVersions(version, openAICodexAstraMinVersion) < 0) {
-		h.Set("version", openAICodexAstraMinVersion)
-		h.Set("user-agent", buildCodexCLIUserAgent(openAICodexAstraMinVersion))
-		h.Set("originator", openai.CodexDefaultOriginator)
-	}
-}
-
-func needsOpenAICodexAstraVersion(model string) bool {
-	m := strings.ToLower(normalizeOpenAICodexTicketModel(model))
-	return strings.Contains(m, "gpt-6") || strings.Contains(m, "astra")
 }
 
 func (s *OpenAIGatewayService) StartOpenAICodexTicketHarvester() {

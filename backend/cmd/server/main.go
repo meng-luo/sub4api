@@ -158,6 +158,8 @@ func runMainServer() {
 			log.Printf("Plugin manager started in degraded state: %v", err)
 		}
 	}
+	// Automatic ticket requests use the gateway's plugin routing.
+	app.OpenAIGateway.StartOpenAICodexTicketHarvester()
 	if app.PromptAudit != nil {
 		if err := app.PromptAudit.Start(context.Background()); err != nil {
 			// Startup continues so unrelated APIs stay up. Fail-closed (unavailable)

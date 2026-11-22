@@ -19,14 +19,15 @@ import (
 func TestCodexProbeBuildersHonorTemplateSnapshot(t *testing.T) {
 	custom := strings.Replace(DefaultCodexProbeTemplate(), "anonymous workspace", "pinned workspace", 1)
 	repo := &codexPolicyMigrationRepoStub{values: map[string]string{SettingKeyOpenAICodexTicketPromptTemplate: custom}}
-	var harvestHeaders http.Header
+	var harvestSession, harvestInstallation string
 	upstream := &codexTicketFuncUpstream{do: func(req *http.Request) (*http.Response, error) {
 		body, err := io.ReadAll(req.Body)
 		require.NoError(t, err)
-		assertCodexProbeIdentity(t, body, req.Header)
+		assertCodexOutboundProbeIdentity(t, body, req.Header)
 		require.Contains(t, string(body), "pinned workspace")
 		require.Equal(t, "harvest challenge", gjson.GetBytes(body, "input.4.content.0.text").String())
-		harvestHeaders = req.Header.Clone()
+		harvestSession = req.Header.Get("session-id")
+		harvestInstallation = gjson.GetBytes(body, "client_metadata.x-codex-installation-id").String()
 		return codexTicketResponse(), nil
 	}}
 	svc, account, _ := challengeHarvestService(t, upstream)
@@ -42,11 +43,29 @@ func TestCodexProbeBuildersHonorTemplateSnapshot(t *testing.T) {
 	assertCodexProbeIdentity(t, body, headers)
 	require.Contains(t, string(body), "pinned workspace")
 	require.Equal(t, "diagnostic challenge", gjson.GetBytes(body, "input.4.content.0.text").String())
-	require.NotEqual(t, harvestHeaders.Get("session-id"), headers.Get("session-id"))
-	require.Equal(t, harvestHeaders.Get("x-codex-installation-id"), headers.Get("x-codex-installation-id"))
+	require.NotEqual(t, harvestSession, headers.Get("session-id"))
+	require.Equal(t, scopeCodexAccountIdentityValue(account, 0, "installation", headers.Get("x-codex-installation-id")), harvestInstallation)
 	body, _, err = svc.buildCodexProbeRequest(context.Background(), account, "gpt-5.4", ModelTraceChallenge{Prompt: "next model challenge"})
 	require.NoError(t, err)
 	require.Contains(t, string(body), "updated workspace")
+}
+
+func assertCodexOutboundProbeIdentity(t *testing.T, body []byte, headers http.Header) {
+	t.Helper()
+	metadata := gjson.GetBytes(body, "client_metadata")
+	session, thread := headers.Get("session-id"), headers.Get("thread-id")
+	require.NotEmpty(t, session)
+	require.NotEmpty(t, thread)
+	require.Equal(t, session, gjson.GetBytes(body, "prompt_cache_key").String())
+	require.Equal(t, session, metadata.Get("session_id").String())
+	require.Equal(t, thread, metadata.Get("thread_id").String())
+	require.Equal(t, thread, headers.Get("x-client-request-id"))
+	require.Equal(t, metadata.Get("x-codex-window-id").String(), headers.Get("x-codex-window-id"))
+	require.JSONEq(t, metadata.Get("x-codex-turn-metadata").String(), headers.Get("x-codex-turn-metadata"))
+	require.NotEmpty(t, metadata.Get("x-codex-installation-id").String())
+	require.Empty(t, headers.Get("x-codex-installation-id"))
+	require.Empty(t, headers.Get("session_id"))
+	require.Empty(t, headers.Get("OpenAI-Beta"))
 }
 
 func TestCodexProbeGatewayAccountAndFingerprintRewritesStayConsistent(t *testing.T) {

@@ -3,17 +3,15 @@ package service
 import (
 	"bytes"
 	"context"
-	"errors"
 	"io"
 	"net/http"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/MACOS-DO/sub4api/internal/config"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 type codexTicketFuncUpstream struct {
@@ -37,43 +35,75 @@ func ticketProbeChallenge(t *testing.T) ModelTraceChallenge {
 	return challenge
 }
 
-func TestCodexTicketProbeBypassesPluginDuringWiring(t *testing.T) {
+func TestCodexTicketProbeUsesGatewayPluginPolicy(t *testing.T) {
 	manager := &PluginManager{}
-	manager.route.Store(&pluginRoute{pluginID: 1, rolloutPercent: 100, unavailable: "plugin must not handle synthetic probes"})
-	var calls atomic.Int64
+	var calls int
 	upstream := &codexTicketFuncUpstream{do: func(req *http.Request) (*http.Response, error) {
-		calls.Add(1)
-		if HTTPUpstreamProfileFromContext(req.Context()) != HTTPUpstreamProfileOpenAIHarvest || !req.Close {
-			return nil, errors.New("missing no-reuse transport profile")
-		}
+		calls++
+		require.Equal(t, HTTPUpstreamProfileOpenAIHarvest, HTTPUpstreamProfileFromContext(req.Context()))
+		require.True(t, req.Close)
 		return codexTicketResponse(), nil
 	}}
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: true}, upstream)
 	svc.SetPluginManager(manager)
 	account := ticketTestAccount(41)
-	// This binding rejects ordinary traffic; harvesting still uses the dedicated transport.
-	request, _ := http.NewRequest(http.MethodPost, "https://example.com", nil)
-	_, err := svc.doOpenAIUpstream(request, "", account)
-	require.Error(t, err)
-	start := make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		<-start
-		for i := 0; i < 200; i++ {
-			svc.SetPluginManager(manager)
-		}
-	}()
-	close(start)
-	for i := 0; i < 20; i++ {
-		probe, err := svc.fireOpenAICodexTicketProbe(context.Background(), account, "test-token", "gpt-6-astra", "http://proxy.example.com:8080", ticketProbeChallenge(t), time.Second)
-		require.NoError(t, err)
-		require.Equal(t, http.StatusOK, probe.status)
-		require.Len(t, probe.state, 292)
+	probe := func() (codexTicketProbeResult, error) {
+		return svc.fireOpenAICodexTicketProbe(context.Background(), account, "test-token", "gpt-6-astra", "http://proxy.example.com:8080", ticketProbeChallenge(t), time.Second)
 	}
-	wg.Wait()
-	require.Equal(t, int64(20), calls.Load())
+	result, err := probe()
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, result.status)
+	require.Len(t, result.state, 292)
+
+	manager.route.Store(&pluginRoute{pluginID: 1, rolloutPercent: 100, unavailable: "test plugin unavailable"})
+	_, err = probe()
+	require.ErrorContains(t, err, "test plugin unavailable")
+	manager.route.Store(nil)
+	manager.cfg = &config.Config{Plugins: config.PluginConfig{RequireOpenAIOAuthPlugin: true}}
+	_, err = probe()
+	require.ErrorContains(t, err, errOpenAIOAuthPluginNotBound)
+	require.Equal(t, 1, calls, "plugin failures must not fall back to the built-in transport")
+}
+
+func TestCodexTicketProbeUsesGatewayVersionAndCanHarvestWithoutTicket(t *testing.T) {
+	const model = "gpt-6.2-astra"
+	const configuredVersion = "0.171.0"
+	oldEnforcement, oldEmit := codexIdentityEnforcement.Load(), codexEmitVersionHeader.Load()
+	codexCanonicalUAMu.RLock()
+	oldResolver := codexCanonicalUAResolver
+	codexCanonicalUAMu.RUnlock()
+	SetCodexIdentityEnforcementEnabled(true)
+	SetCodexCanonicalUserAgentResolver(func() string { return buildCodexCLIUserAgent(configuredVersion) })
+	t.Cleanup(func() {
+		SetCodexIdentityEnforcementEnabled(oldEnforcement)
+		SetCodexEmitVersionHeader(oldEmit)
+		SetCodexCanonicalUserAgentResolver(oldResolver)
+	})
+	account := ticketTestAccount(41)
+	for _, emitVersion := range []bool{false, true} {
+		SetCodexEmitVersionHeader(emitVersion)
+		upstream := &codexTicketFuncUpstream{do: func(req *http.Request) (*http.Response, error) {
+			require.Equal(t, chatgptCodexURL, req.URL.String())
+			require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(req.Context()))
+			require.False(t, req.Close)
+			require.Equal(t, buildCodexCLIUserAgent(configuredVersion), req.UserAgent())
+			if emitVersion {
+				require.Equal(t, configuredVersion, req.Header.Get("version"))
+			} else {
+				require.Empty(t, req.Header.Get("version"))
+			}
+			require.Empty(t, req.Header.Get(openAICodexTurnStateHeader))
+			body, err := io.ReadAll(req.Body)
+			require.NoError(t, err)
+			require.Equal(t, model, gjson.GetBytes(body, "model").String())
+			return codexTicketResponse(), nil
+		}}
+		svc := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: true, FailClosed: true}, upstream)
+		require.ErrorIs(t, svc.applyOpenAICodexTicket(context.Background(), account, model, make(http.Header)), ErrOpenAICodexTicketUnavailable)
+		result, err := svc.fireOpenAICodexTicketProbe(context.Background(), account, "test-token", model, "", ticketProbeChallenge(t), time.Second)
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, result.status)
+	}
 }
 
 func TestCodexTicketProbeParsesNormalSSEAndCookies(t *testing.T) {
@@ -102,17 +132,20 @@ func TestCodexTicketProbeParsesNormalSSEAndCookies(t *testing.T) {
 
 func TestCodexTicketProbeDoesNotCarryExistingTicket(t *testing.T) {
 	account := ticketTestAccount(41)
-	account.Extra = map[string]any{openAICodexTicketExtraKey("gpt-6-astra"): &openAICodexTicket{
-		AccountID: account.ID, Model: "gpt-6-astra", State: fakeCodexTicketState(292),
-		Cookie: "session=old", GenerationID: "old-generation", CapturedAt: time.Now(),
-	}}
+	const model = "gpt-6-astra"
+	ticket := verifiedTicket(account, model, fakeCodexTicketState(292), "__oailb=old")
+	account.Extra = map[string]any{openAICodexTicketExtraKey(model): ticket}
 	upstream := &codexTicketFuncUpstream{do: func(request *http.Request) (*http.Response, error) {
 		require.Empty(t, request.Header.Get(openAICodexTurnStateHeader))
 		require.Empty(t, request.Header.Get("Cookie"))
 		return codexTicketResponse(), nil
 	}}
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: true}, upstream)
-	probe, err := svc.fireOpenAICodexTicketProbe(context.Background(), account, "token", "gpt-6-astra", "http://proxy.example.com:8080", ticketProbeChallenge(t), time.Second)
+	h := make(http.Header)
+	require.NoError(t, svc.applyOpenAICodexTicket(context.Background(), account, model, h))
+	require.Equal(t, ticket.State, h.Get(openAICodexTurnStateHeader))
+	require.Equal(t, "__oailb=old", h.Get("Cookie"))
+	probe, err := svc.fireOpenAICodexTicketProbe(context.Background(), account, "token", model, "http://proxy.example.com:8080", ticketProbeChallenge(t), time.Second)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, probe.status)
 }

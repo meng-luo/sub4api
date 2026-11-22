@@ -367,6 +367,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 		Server:        httpServer,
 		PromptAudit:   promptService,
 		PluginManager: pluginManager,
+		OpenAIGateway: openAIGatewayService,
 		Cleanup:       v,
 	}
 	return application, nil
@@ -378,6 +379,7 @@ type Application struct {
 	Server        *http.Server
 	PromptAudit   *securityaudit.PromptService
 	PluginManager *service.PluginManager
+	OpenAIGateway *service.OpenAIGatewayService
 	Cleanup       func()
 }
 
