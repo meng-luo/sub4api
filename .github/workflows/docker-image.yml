@@ -90,8 +90,9 @@ jobs:
             DATE=${{ steps.meta.outputs.date }}
             GOPROXY=https://proxy.golang.org,direct
             PLUGIN_SIGN=${{ secrets.PLUGIN_SIGNING_KEY != '' && '1' || '0' }}
-            PLUGIN_SIGNING_KEY=${{ secrets.PLUGIN_SIGNING_KEY }}
             GOSUMDB=sum.golang.org
+          secrets: |
+            plugin_signing_key=${{ secrets.PLUGIN_SIGNING_KEY }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}

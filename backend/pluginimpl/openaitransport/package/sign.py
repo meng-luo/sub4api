@@ -23,7 +23,16 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 def load_or_create(path):
     if os.path.exists(path):
         raw = open(path, "rb").read().strip()
-        seed = base64.b64decode(raw)
+        try:
+            seed = base64.b64decode(raw, validate=True)
+        except Exception as exc:
+            raise SystemExit(
+                f"私钥文件 {path} 不是合法 base64：{exc}（应为 base64 编码的 32 字节 Ed25519 私钥）"
+            )
+        if len(seed) != 32:
+            raise SystemExit(
+                f"私钥文件 {path} 解码后必须是 32 字节，实际 {len(seed)} 字节"
+            )
         return Ed25519PrivateKey.from_private_bytes(seed)
     key = Ed25519PrivateKey.generate()
     seed = key.private_bytes(

@@ -103,6 +103,27 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Validate plugin signing key
+        if: steps.current.outputs.publish == 'true'
+        env:
+          PLUGIN_SIGNING_KEY: ${{ secrets.PLUGIN_SIGNING_KEY }}
+        run: |
+          if [ -z "${PLUGIN_SIGNING_KEY}" ]; then
+            echo "未配置 PLUGIN_SIGNING_KEY，将产出未签名包（只能用 plugins.allow_unsigned 安装）"
+            exit 0
+          fi
+          python3 - <<'PY'
+          import base64, os, sys
+          raw = os.environ["PLUGIN_SIGNING_KEY"].strip()
+          try:
+              seed = base64.b64decode(raw, validate=True)
+          except Exception as exc:
+              sys.exit(f"PLUGIN_SIGNING_KEY 不是合法 base64：{exc}")
+          if len(seed) != 32:
+              sys.exit(f"PLUGIN_SIGNING_KEY 解码后必须是 32 字节 Ed25519 私钥，实际 {len(seed)} 字节")
+          print("plugin signing key ok")
+          PY
+
       - name: Build and push to GHCR
         if: steps.current.outputs.publish == 'true'
         id: image
@@ -123,7 +144,8 @@ jobs:
             COMMIT=${{ steps.meta.outputs.commit }}
             DATE=${{ steps.meta.outputs.date }}
             PLUGIN_SIGN=${{ secrets.PLUGIN_SIGNING_KEY != '' && '1' || '0' }}
-            PLUGIN_SIGNING_KEY=${{ secrets.PLUGIN_SIGNING_KEY }}
+          secrets: |
+            plugin_signing_key=${{ secrets.PLUGIN_SIGNING_KEY }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.version=${{ steps.meta.outputs.version }}

@@ -106,17 +106,19 @@ RUN --mount=type=cache,id=sub2api-gomod,target=/go/pkg/mod \
 # 默认（PLUGIN_SIGN=0）为未签名包。sign.py 依赖 python-cryptography（构建阶段已装）。
 #
 # PLUGIN_SIGN 必须显式置 1 才会签名；置 1 却拿不到私钥时直接失败，不静默降级。
+#
+# 私钥必须走 BuildKit secret，不能用 build-arg：实测 build-arg 的值会以明文
+# 出现在镜像 history（docker history --no-trunc）里，等于把私钥随镜像发出去。
 ARG PLUGIN_VERSION=0.1.0
 ARG PLUGIN_SIGN=0
-ARG PLUGIN_SIGNING_KEY=
-RUN --mount=type=cache,id=sub2api-gomod,target=/go/pkg/mod \
+RUN --mount=type=secret,id=plugin_signing_key,required=false \
+    --mount=type=cache,id=sub2api-gomod,target=/go/pkg/mod \
     --mount=type=cache,id=sub2api-gobuild,target=/root/.cache/go-build \
     if [ "${PLUGIN_SIGN}" = "1" ]; then \
-        if [ -z "${PLUGIN_SIGNING_KEY}" ]; then \
-            echo "PLUGIN_SIGN=1 但未提供 PLUGIN_SIGNING_KEY" >&2; exit 1; \
+        if [ ! -s /run/secrets/plugin_signing_key ]; then \
+            echo "PLUGIN_SIGN=1 但未提供 build secret plugin_signing_key" >&2; exit 1; \
         fi; \
-        echo "${PLUGIN_SIGNING_KEY}" | base64 -d > /tmp/.sign_key; \
-        export SIGN_KEY=/tmp/.sign_key; \
+        export SIGN_KEY=/run/secrets/plugin_signing_key; \
     fi; \
     VERSION="${PLUGIN_VERSION}" OUT=/app/plugin-dist \
     bash ./pluginimpl/openaitransport/package/build.sh "linux-${TARGETARCH:-$(go env GOARCH)}"
