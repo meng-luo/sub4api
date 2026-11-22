@@ -235,8 +235,10 @@ func (s *OpenAIGatewayService) runCodexTicketAttemptWithChallengeGenerator(ctx c
 		return result, nil
 	}
 	a.ChallengeExpectedCount = new(challenge.ExpectedCount)
-	output, state, cookie, status, probeErr := s.fireOpenAICodexTicketProbe(ctx, account, token, model, proxyURL,
+	probe, probeErr := s.fireOpenAICodexTicketProbe(ctx, account, token, model, proxyURL,
 		challenge, time.Duration(cfg.HarvestAttemptTimeoutSeconds)*time.Second)
+	state, cookie, status := probe.state, probe.cookie, probe.status
+	a.UpstreamErrorCode, a.UpstreamErrorMessage = probe.errorCode, probe.errorMessage
 	if status != 0 {
 		a.HTTPStatus = &status
 		length := len(state)
@@ -261,7 +263,7 @@ func (s *OpenAIGatewayService) runCodexTicketAttemptWithChallengeGenerator(ctx c
 		a.Outcome, a.ReasonCode = "miss", "http_status"
 		return result, nil
 	}
-	prediction, snapshot, predictErr := modelTracePredictForModel(model, output, challenge.ExpectedCount)
+	prediction, snapshot, predictErr := modelTracePredictForModel(model, probe.output, challenge.ExpectedCount)
 	if snapshot != nil {
 		a.FingerprintCommit = snapshot.commit
 	}

@@ -33,7 +33,7 @@ func TestCodexProbeBuildersHonorTemplateSnapshot(t *testing.T) {
 	svc.settingService.settingRepo = repo
 	pinned, err := svc.PrepareCodexProbeContext(context.Background())
 	require.NoError(t, err)
-	_, _, _, _, err = svc.fireOpenAICodexTicketProbe(pinned, account, "test-token", "gpt-6-astra", "", ModelTraceChallenge{Prompt: "harvest challenge"}, time.Second)
+	_, err = svc.fireOpenAICodexTicketProbe(pinned, account, "test-token", "gpt-6-astra", "", ModelTraceChallenge{Prompt: "harvest challenge"}, time.Second)
 	require.NoError(t, err)
 	repo.values[SettingKeyOpenAICodexTicketPromptTemplate] = strings.Replace(custom, "pinned workspace", "updated workspace", 1)
 	svc.settingService.InvalidateCodexProbeTemplateCache()

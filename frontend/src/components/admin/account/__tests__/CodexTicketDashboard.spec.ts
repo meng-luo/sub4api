@@ -73,4 +73,29 @@ describe('Codex ticket dashboard', () => {
     wrapper.unmount()
   })
 
+  it('shows upstream error details only in attempts that recorded them', async () => {
+    events.mockResolvedValue({ items: [attempt, {
+      ...attempt,
+      id: 3,
+      reason_code: 'http_status',
+      http_status: 400,
+      upstream_error_code: 'invalid_request_error',
+      upstream_error_message: 'The requested model is not supported.'
+    }], total: 2 })
+    const wrapper = mountDashboard()
+    await flushPromises()
+    await wrapper.findAll('nav button').find(button => button.text() === '打票流水')!.trigger('click')
+    await flushPromises()
+    const [oldAttempt, failedAttempt] = wrapper.findAll('section[aria-label="打票流水"] button')
+    expect(wrapper.text()).not.toContain('invalid_request_error')
+    await oldAttempt.trigger('click')
+    expect(wrapper.get('[aria-label="流水详情"]').text()).not.toContain('上游错误详情')
+    await wrapper.get('[aria-label="流水详情"] button[aria-label="关闭"]').trigger('click')
+    await failedAttempt.trigger('click')
+    const detail = wrapper.get('[aria-label="流水详情"]')
+    expect(detail.text()).toContain('上游错误详情')
+    expect(detail.text()).toContain('invalid_request_error')
+    expect(detail.text()).toContain('The requested model is not supported.')
+    wrapper.unmount()
+  })
 })

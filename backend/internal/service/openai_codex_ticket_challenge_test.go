@@ -173,6 +173,44 @@ func TestCodexTicketChallengeFailureRecordsErrorWithoutRequest(t *testing.T) {
 	require.True(t, scheduled)
 }
 
+func TestCodexTicketHarvestRecordsSanitizedUpstreamError(t *testing.T) {
+	for _, test := range []struct {
+		name, contentType, response, code, message string
+	}{
+		{"structured", "application/json", `{"error":{"code":"invalid_request_error","message":"Unsupported model. Bearer opaque; route socks5://user:private@proxy.test; state response-state; cookie response-cookie; token echoed-token"},"access_token":"ignored"}`, "invalid_request_error", "Unsupported model."},
+		{"ChatGPT detail", "application/json", `{"detail":"The requested model is not supported."}`, "", "The requested model is not supported."},
+		{"HTML", "text/html; charset=utf-8", `<html>Unexpected response with private content</html>`, "", "Upstream returned an HTML error page."},
+		{"oversized", "application/json", strings.Repeat("x", codexTicketErrorBodyLimit+1), "", "Upstream error response exceeded 16 KiB."},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			upstream := &codexTicketFuncUpstream{do: func(req *http.Request) (*http.Response, error) {
+				header := http.Header{}
+				header.Set("Content-Type", test.contentType)
+				header.Set(openAICodexTurnStateHeader, "response-state")
+				header.Add("Set-Cookie", "__cfruid=response-cookie; HttpOnly")
+				header.Add("Set-Cookie", "session=ordinary-cookie; HttpOnly")
+				body := strings.ReplaceAll(test.response, "echoed-token", strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer "))
+				return &http.Response{StatusCode: http.StatusBadRequest, Header: header, Body: io.NopCloser(strings.NewReader(body))}, nil
+			}}
+			svc, account, history := challengeHarvestService(t, upstream)
+			result, err := svc.runCodexTicketAttempt(context.Background(), account, "gpt-6-astra", "automatic")
+			require.NoError(t, err)
+			require.Equal(t, "miss", result.Outcome)
+			require.Equal(t, "http_status", result.ReasonCode)
+			require.Equal(t, http.StatusBadRequest, *result.HTTPStatus)
+			require.True(t, result.HistoryRecorded)
+			require.Len(t, history.attempts, 1)
+			attempt := history.attempts[0]
+			require.Equal(t, test.code, attempt.UpstreamErrorCode)
+			require.Contains(t, attempt.UpstreamErrorMessage, test.message)
+			for _, secret := range []string{"opaque", "user:private", "response-state", "response-cookie", "ordinary-cookie", "ignored", "private content"} {
+				require.NotContains(t, attempt.UpstreamErrorMessage, secret)
+			}
+			require.NotContains(t, attempt.UpstreamErrorMessage, account.GetOpenAIAccessToken())
+		})
+	}
+}
+
 func TestCodexTicketSharedFingerprintHarvest(t *testing.T) {
 	for _, test := range []struct {
 		name          string

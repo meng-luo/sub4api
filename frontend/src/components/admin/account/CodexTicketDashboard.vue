@@ -94,7 +94,19 @@
             <div v-else-if="rawDetail" class="grid gap-4 md:grid-cols-2"><div v-for="field in credentialFields" :key="field.label" class="min-w-0 rounded-xl border border-gray-200 p-4 dark:border-dark-600"><div class="flex items-center justify-between gap-2"><span class="text-xs font-semibold text-gray-500">{{ field.label }}</span><button v-if="field.value" type="button" class="text-xs font-semibold text-primary-600" @click="copy(field.value)">{{ text.copy }}</button></div><pre class="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-xs text-gray-800 dark:text-dark-200">{{ field.value || (field.original ? text.notCarried : text.notReturned) }}</pre></div></div>
             <div v-if="rawDetail?.returned_set_cookies?.length" class="mt-4 rounded-xl border border-gray-200 p-4 dark:border-dark-600"><h4 class="text-xs font-semibold text-gray-500">Set-Cookie</h4><pre v-for="(cookie, index) in rawDetail.returned_set_cookies" :key="index" class="mt-2 overflow-auto whitespace-pre-wrap break-all font-mono text-xs">{{ cookie }}</pre></div>
           </div>
-          <dl v-else class="mt-5 grid gap-3 text-sm sm:grid-cols-2"><div v-for="field in attemptFields" :key="field.label" class="rounded-lg bg-gray-50 p-3 dark:bg-dark-700"><dt class="text-xs text-gray-500 dark:text-dark-400">{{ field.label }}</dt><dd class="mt-1 break-all font-medium text-gray-900 dark:text-white">{{ field.value }}</dd></div></dl>
+          <dl v-else class="mt-5 grid gap-3 text-sm sm:grid-cols-2">
+            <div v-for="field in attemptFields" :key="field.label" class="rounded-lg bg-gray-50 p-3 dark:bg-dark-700">
+              <dt class="text-xs text-gray-500 dark:text-dark-400">{{ field.label }}</dt>
+              <dd class="mt-1 break-all font-medium text-gray-900 dark:text-white">{{ field.value }}</dd>
+            </div>
+            <div v-if="detail.upstream_error_code || detail.upstream_error_message" class="min-w-0 rounded-lg bg-gray-50 p-3 dark:bg-dark-700 sm:col-span-2">
+              <dt class="text-xs text-gray-500 dark:text-dark-400">{{ text.upstreamErrorDetails }}</dt>
+              <dd class="mt-1 [overflow-wrap:anywhere] text-gray-900 dark:text-white">
+                <code v-if="detail.upstream_error_code" class="block font-medium">{{ detail.upstream_error_code }}</code>
+                <p v-if="detail.upstream_error_message" class="whitespace-pre-wrap" :class="{ 'mt-1': detail.upstream_error_code }">{{ detail.upstream_error_message }}</p>
+              </dd>
+            </div>
+          </dl>
         </section>
       </div>
     </div>
@@ -129,7 +141,7 @@ const text = computed(() => locale.value.startsWith('zh') ? {
   attemptsDesc: '成功、未命中与执行错误只在这里展示，不代表当前票失效。', invalidationsDesc: '新版仅在已携带票据的请求中，turn-state 与 __oailb 同时变化时记录失效。旧版仅比较 turn-state；两类记录均不表示推算的 TTL 到期。',
   filter: '结果', model: '模型', all: '全部结果', success: '打票成功', failure: '失败与错误', invalidation: '票据失效', allModels: '全部模型',
   loading: '正在加载…', empty: '没有符合条件的记录（最多保留 90 天）', records: '条记录', legacy: '旧版长度校验',
-  details: '流水详情', copy: '复制', notCarried: '未携带', notReturned: '上游未返回',
+  details: '流水详情', upstreamErrorDetails: '上游错误详情', copy: '复制', notCarried: '未携带', notReturned: '上游未返回',
   error: '操作失败'
 } : {
   title: 'Ticket center', retention: 'Records retained for 90 days · credentials visible to admins only', refresh: 'Refresh', close: 'Close',
@@ -145,7 +157,7 @@ const text = computed(() => locale.value.startsWith('zh') ? {
   attemptsDesc: 'Success, misses and errors are shown here; failed attempts do not mean the current ticket is invalid.', invalidationsDesc: 'New events require both turn-state and __oailb to change on a request carrying a saved ticket. Legacy events only compared turn-state. Neither is an inferred TTL expiry.',
   filter: 'Result', model: 'Model', all: 'All results', success: 'Success', failure: 'Failures & errors', invalidation: 'Invalidation', allModels: 'All models',
   loading: 'Loading…', empty: 'No matching records (90-day retention)', records: 'records', legacy: 'Legacy length check',
-  details: 'Event details', copy: 'Copy', notCarried: 'Not carried', notReturned: 'Not returned by upstream',
+  details: 'Event details', upstreamErrorDetails: 'Upstream error details', copy: 'Copy', notCarried: 'Not carried', notReturned: 'Not returned by upstream',
   error: 'Operation failed'
 })
 type Tab = 'tickets' | 'attempts' | 'invalidations'

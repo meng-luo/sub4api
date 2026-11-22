@@ -18,6 +18,8 @@ type CodexTicketAttempt struct {
 	TicketLength              *int       `json:"ticket_length"`
 	DurationMS                int        `json:"duration_ms"`
 	ReasonCode                string     `json:"reason_code,omitempty"`
+	UpstreamErrorCode         string     `json:"upstream_error_code,omitempty"`
+	UpstreamErrorMessage      string     `json:"upstream_error_message,omitempty"`
 	ProxyID                   *int64     `json:"proxy_id,omitempty"`
 	ProxyName                 string     `json:"proxy_name,omitempty"`
 	ExpiresAt                 *time.Time `json:"expires_at,omitempty"`

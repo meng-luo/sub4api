@@ -70,8 +70,8 @@ func (s *OpenAIGatewayService) RunCodexNativeDiagnostic(ctx context.Context, acc
 	if timeout <= 0 {
 		timeout = 120 * time.Second
 	}
-	output, _, _, status, probeErr := s.fireOpenAICodexTicketProbe(probeCtx, account, token, model, proxyURL, challenge, timeout)
-	result.HTTPStatus = status
+	probe, probeErr := s.fireOpenAICodexTicketProbe(probeCtx, account, token, model, proxyURL, challenge, timeout)
+	result.HTTPStatus = probe.status
 	if probeErr != nil {
 		result.Reason = "request"
 		if errors.Is(probeErr, ErrCodexProbeTemplateInvalid) {
@@ -85,15 +85,15 @@ func (s *OpenAIGatewayService) RunCodexNativeDiagnostic(ctx context.Context, acc
 		}
 		return result
 	}
-	if status != http.StatusOK {
+	if probe.status != http.StatusOK {
 		result.Reason = "http_status"
 		return result
 	}
-	if strings.TrimSpace(output) == "" {
+	if strings.TrimSpace(probe.output) == "" {
 		result.Reason = "response_incomplete"
 		return result
 	}
-	result.Output = output
+	result.Output = probe.output
 	return result
 }
 

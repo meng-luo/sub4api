@@ -24,13 +24,14 @@ func NewCodexTicketAttemptRepository(db *sql.DB) service.CodexTicketAttemptRepos
 func (r *codexTicketAttemptRepository) Insert(ctx context.Context, a *service.CodexTicketAttempt) error {
 	return r.db.QueryRowContext(ctx, `INSERT INTO codex_ticket_attempts
 		(account_id,model,occurred_at,outcome,source,http_status,ticket_length,duration_ms,reason_code,proxy_id,proxy_name,expires_at,
-		 ticket_generation_id,verification_method,fingerprint_commit,fingerprint_predicted_model,fingerprint_probability,fingerprint_matched,challenge_expected_count,parsed_number_count,turn_state_present,cookie_present)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) RETURNING id`,
+		 ticket_generation_id,verification_method,fingerprint_commit,fingerprint_predicted_model,fingerprint_probability,fingerprint_matched,challenge_expected_count,parsed_number_count,turn_state_present,cookie_present,
+		 upstream_error_code,upstream_error_message)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,NULLIF($23,''),NULLIF($24,'')) RETURNING id`,
 		a.AccountID, a.Model, a.OccurredAt, a.Outcome, a.Trigger, a.HTTPStatus, a.TicketLength,
 		a.DurationMS, a.ReasonCode, a.ProxyID, a.ProxyName, a.ExpiresAt,
 		a.TicketGenerationID, a.VerificationMethod, a.FingerprintCommit, a.FingerprintPredictedModel,
 		a.FingerprintProbability, a.FingerprintMatched, a.ChallengeExpectedCount, a.ParsedNumberCount,
-		a.TurnStatePresent, a.CookiePresent).Scan(&a.ID)
+		a.TurnStatePresent, a.CookiePresent, a.UpstreamErrorCode, a.UpstreamErrorMessage).Scan(&a.ID)
 }
 
 func (r *codexTicketAttemptRepository) List(ctx context.Context, accountID int64, model string, successOnly bool, page, size int) ([]service.CodexTicketAttempt, int64, error) {
@@ -43,7 +44,8 @@ func (r *codexTicketAttemptRepository) List(ctx context.Context, accountID int64
 		return nil, 0, err
 	}
 	rows, err := r.db.QueryContext(ctx, `SELECT id,model,occurred_at,outcome,source,http_status,ticket_length,duration_ms,reason_code,proxy_id,proxy_name,expires_at,
-		 ticket_generation_id,verification_method,fingerprint_commit,fingerprint_predicted_model,fingerprint_probability,fingerprint_matched,challenge_expected_count,parsed_number_count,turn_state_present,cookie_present
+		 ticket_generation_id,verification_method,fingerprint_commit,fingerprint_predicted_model,fingerprint_probability,fingerprint_matched,challenge_expected_count,parsed_number_count,turn_state_present,cookie_present,
+		 upstream_error_code,upstream_error_message
 		FROM codex_ticket_attempts WHERE `+condition+` ORDER BY occurred_at DESC,id DESC,outcome LIMIT $3 OFFSET $4`,
 		accountID, model, size, (page-1)*size)
 	if err != nil {
@@ -54,7 +56,7 @@ func (r *codexTicketAttemptRepository) List(ctx context.Context, accountID int64
 	for rows.Next() {
 		a := service.CodexTicketAttempt{AccountID: accountID, Model: model}
 		var status, length, proxyID sql.NullInt64
-		var reason, name sql.NullString
+		var reason, name, errorCode, errorMessage sql.NullString
 		var expires sql.NullTime
 		var generation, method, commit, predicted sql.NullString
 		var probability sql.NullFloat64
@@ -62,7 +64,7 @@ func (r *codexTicketAttemptRepository) List(ctx context.Context, accountID int64
 		var expected, parsed sql.NullInt64
 		if err := rows.Scan(&a.ID, &a.Model, &a.OccurredAt, &a.Outcome, &a.Trigger, &status, &length,
 			&a.DurationMS, &reason, &proxyID, &name, &expires, &generation, &method, &commit, &predicted,
-			&probability, &matched, &expected, &parsed, &turnState, &cookie); err != nil {
+			&probability, &matched, &expected, &parsed, &turnState, &cookie, &errorCode, &errorMessage); err != nil {
 			return nil, 0, err
 		}
 		if status.Valid {
@@ -106,6 +108,7 @@ func (r *codexTicketAttemptRepository) List(ctx context.Context, accountID int64
 			a.CookiePresent = &cookie.Bool
 		}
 		a.ReasonCode, a.ProxyName = reason.String, name.String
+		a.UpstreamErrorCode, a.UpstreamErrorMessage = errorCode.String, errorMessage.String
 		result = append(result, a)
 	}
 	return result, total, rows.Err()

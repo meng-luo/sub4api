@@ -19,6 +19,8 @@ export interface TicketEvent {
   ticket_length?: number | null
   duration_ms?: number
   reason_code?: string
+  upstream_error_code?: string | null
+  upstream_error_message?: string | null
   http_status?: number | null
   response_http_status?: number | null
   proxy_name?: string

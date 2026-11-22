@@ -434,16 +434,23 @@ func (s *OpenAIGatewayService) openAICodexTicketBlocksAccount(account *Account, 
 	return !ticket.usable(time.Now(), 0, false, 0)
 }
 
-func (s *OpenAIGatewayService) fireOpenAICodexTicketProbe(ctx context.Context, account *Account, token, model, proxyURL string, challenge ModelTraceChallenge, attemptTimeout time.Duration) (output string, state string, cookie string, status int, err error) {
+type codexTicketProbeResult struct {
+	output, state, cookie   string
+	status                  int
+	errorCode, errorMessage string
+}
+
+func (s *OpenAIGatewayService) fireOpenAICodexTicketProbe(ctx context.Context, account *Account, token, model, proxyURL string, challenge ModelTraceChallenge, attemptTimeout time.Duration) (codexTicketProbeResult, error) {
+	var result codexTicketProbeResult
 	attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
 	defer cancel()
 	body, replayHeaders, err := s.buildCodexProbeRequest(attemptCtx, account, model, challenge)
 	if err != nil {
-		return "", "", "", 0, err
+		return result, err
 	}
 	req, err := http.NewRequestWithContext(attemptCtx, http.MethodPost, chatgptCodexURL, bytes.NewReader(body))
 	if err != nil {
-		return "", "", "", 0, err
+		return result, err
 	}
 	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAIHarvest))
 	req.Close = true
@@ -456,24 +463,24 @@ func (s *OpenAIGatewayService) fireOpenAICodexTicketProbe(ctx context.Context, a
 		req.Header[name] = values
 	}
 	if err := resolveAndSetOpenAIChatGPTAccountHeaders(attemptCtx, s.accountRepo, req.Header, account); err != nil {
-		return "", "", "", 0, err
+		return result, err
 	}
 	applyOpenAICodexTicketHarvestIdentity(req.Header, model)
 	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
 	if err != nil {
-		return "", "", "", 0, err
+		return result, err
 	}
 	if resp == nil {
-		return "", "", "", 0, errors.New("nil upstream response")
+		return result, errors.New("nil upstream response")
 	}
-	defer func() {
-		if resp.Body != nil {
-			_ = resp.Body.Close()
-		}
-	}()
-	state, cookie, status = extractOpenAICodexTurnState(resp.Header), extractOpenAICodexResponseCookies(resp.Header), resp.StatusCode
+	result.state, result.cookie, result.status = extractOpenAICodexTurnState(resp.Header), extractOpenAICodexResponseCookies(resp.Header), resp.StatusCode
 	if resp.Body == nil {
-		return "", state, cookie, status, nil
+		return result, nil
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if result.status != http.StatusOK {
+		result.errorCode, result.errorMessage, err = readCodexTicketUpstreamError(resp, token, result.state)
+		return result, err
 	}
 	scanner := bufio.NewScanner(io.LimitReader(resp.Body, 2<<20))
 	scanner.Buffer(make([]byte, 4096), 1<<20)
@@ -505,12 +512,13 @@ func (s *OpenAIGatewayService) fireOpenAICodexTicketProbe(ctx context.Context, a
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return "", state, cookie, status, err
+		return result, err
 	}
-	if deltas.Len() > 0 {
-		return deltas.String(), state, cookie, status, nil
+	result.output = deltas.String()
+	if result.output == "" {
+		result.output = completed
 	}
-	return completed, state, cookie, status, nil
+	return result, nil
 }
 
 func extractOpenAICodexResponseCookies(h http.Header) string {
