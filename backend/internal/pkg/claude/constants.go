@@ -120,7 +120,12 @@ const (
 	StainlessArch           = "x64"
 	StainlessRuntime        = "node"
 	StainlessRuntimeVersion = "v22.19.0"
-	StainlessPackageVersion = "0.112.1"
+	// StainlessPackageVersion 必须与 CLICurrentVersion 属于同一代的
+	// @anthropic-ai/sdk。上游会把 X-Stainless-Package-Version 与 User-Agent 里的
+	// claude-cli 版本交叉比对：一个 claude-cli/2.1.33x 却挂着十几代之前的 SDK
+	// 版本，本身就是「非正版客户端」的强信号，比缺失该头更容易被标记。
+	// 取值为该 CLI 版本内置的 anthropic-sdk-typescript 版本（实测 2.1.330 → 0.128.0）。
+	StainlessPackageVersion = "0.128.0"
 )
 
 // DefaultHeaders 是 Claude Code 客户端默认请求头。
@@ -142,9 +147,17 @@ func DefaultHeaders() map[string]string {
 		"X-Stainless-Retry-Count":                   "0",
 		"X-Stainless-Timeout":                       "600",
 		"X-App":                                     "cli",
-		"Anthropic-Dangerous-Direct-Browser-Access": "true",
 	}
 }
+
+// BrowserAccessHeaderName 是 SDK 仅在浏览器环境下注入的 CORS 预检豁免头。
+//
+// 真实 claude-cli 跑在 Node/Bun 上，anthropic-sdk-typescript 的
+// dangerouslyAllowBrowser 从未开启，因此这个头在官方 CLI 流量里根本不存在。
+// 带着它 + X-Stainless-Runtime: node 是自相矛盾的组合，比不带更可疑，所以
+// 伪装路径一律不注入。header 白名单仍保留该名字，以便下游真实浏览器客户端
+// 透传自己的值。
+const BrowserAccessHeaderName = "anthropic-dangerous-direct-browser-access"
 
 // Model 表示一个 Claude 模型
 type Model struct {

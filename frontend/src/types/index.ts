@@ -1395,7 +1395,8 @@ export interface Account {
   rpm_sticky_buffer?: number | null
   user_msg_queue_mode?: string | null  // "serialize" | "throttle" | null
 
-  // TLS指纹伪装（仅 Anthropic OAuth/SetupToken 账号有效）
+  // TLS 指纹伪装（Anthropic OAuth/SetupToken 账号恒开启，无独立开关）
+  // enable_tls_fingerprint 仅作为后端回报的只读信号保留，前端不再写入。
   enable_tls_fingerprint?: boolean | null
   tls_fingerprint_profile_id?: number | null
 

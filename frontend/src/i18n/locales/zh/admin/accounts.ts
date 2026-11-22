@@ -1380,6 +1380,7 @@ export default {
         tlsFingerprint: {
           label: 'TLS 指纹模拟',
           hint: '模拟 Node.js/Claude Code 客户端的 TLS 指纹',
+          alwaysOnHint: '选择连接 HTTPS 上游时使用的指纹模板。通过 HTTPS 代理连接时使用标准 TLS。',
           defaultProfile: '内置默认',
           randomProfile: '随机'
         },

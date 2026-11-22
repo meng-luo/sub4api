@@ -1268,6 +1268,7 @@ export default {
         tlsFingerprint: {
           label: 'TLS Fingerprint Simulation',
           hint: 'Simulate Node.js/Claude Code client TLS fingerprint',
+          alwaysOnHint: 'Select the profile for connections to HTTPS upstreams. Connections through an HTTPS proxy use standard TLS.',
           defaultProfile: 'Built-in Default',
           randomProfile: 'Random'
         },

@@ -378,8 +378,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	tlsProfile := s.tlsFPProfileService.ResolveTLSProfile(account)
 
 	// 调试日志：记录即将转发的账号信息
-	logger.LegacyPrintf("service.gateway", "[Forward] Using account: ID=%d Name=%s Platform=%s Type=%s TLSFingerprint=%v Proxy=%s",
-		account.ID, account.Name, account.Platform, account.Type, tlsProfile, proxyURL)
+	slog.Debug("gateway_forward_account", "account_id", account.ID, "name", account.Name,
+		"platform", account.Platform, "type", account.Type, "tls_fingerprint_requested", tlsProfile != nil,
+		"proxy_id", account.ProxyID)
 	// Pre-filter: strip empty text blocks (including nested in tool_result) to prevent upstream 400.
 	if err := replaceBody(StripEmptyTextBlocks(body)); err != nil {
 		return nil, err

@@ -271,8 +271,9 @@ type Account struct {
 	RPMStickyBuffer  *int    `json:"rpm_sticky_buffer,omitempty"`
 	UserMsgQueueMode *string `json:"user_msg_queue_mode,omitempty"`
 
-	// TLS指纹伪装（仅 Anthropic OAuth/SetupToken 账号有效）
-	// 从 extra 字段提取，方便前端显示和编辑
+	// TLS 指纹伪装：Anthropic OAuth/SetupToken 账号恒开启，没有独立开关。
+	// EnableTLSFingerprint 是只读回报字段（恒为 true），表示该账号支持配置指纹模板。
+	// HTTPS 代理使用标准 TLS。extra 中残留的 enable_tls_fingerprint 不再读取。
 	EnableTLSFingerprint    *bool  `json:"enable_tls_fingerprint,omitempty"`
 	TLSFingerprintProfileID *int64 `json:"tls_fingerprint_profile_id,omitempty"`
 

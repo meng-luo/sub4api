@@ -1032,7 +1032,7 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 						"platform", acc.Platform,
 						"type", acc.Type,
 						"status", acc.Status,
-						"tls_fingerprint", acc.IsTLSFingerprintEnabled())
+						"tls_fingerprint", acc.IsAnthropicOAuthOrSetupToken())
 				}
 			}
 		}
@@ -1077,7 +1077,7 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 					"platform", acc.Platform,
 					"type", acc.Type,
 					"status", acc.Status,
-					"tls_fingerprint", acc.IsTLSFingerprintEnabled())
+					"tls_fingerprint", acc.IsAnthropicOAuthOrSetupToken())
 			}
 		}
 		return s.filterAccountsBySchedulingThreshold(ctx, filtered), useMixed, nil
@@ -1112,7 +1112,7 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 				"platform", acc.Platform,
 				"type", acc.Type,
 				"status", acc.Status,
-				"tls_fingerprint", acc.IsTLSFingerprintEnabled())
+				"tls_fingerprint", acc.IsAnthropicOAuthOrSetupToken())
 		}
 	}
 	accounts = s.filterAccountsBySchedulingThreshold(ctx, accounts)

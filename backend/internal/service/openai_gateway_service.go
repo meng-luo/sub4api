@@ -54,13 +54,9 @@ const (
 	openAIWSRetryJitterRatioDefault    = 0.2
 	openAICompactSessionSeedKey        = "openai_compact_session_seed"
 	openAIUpstreamEndpointContextKey   = "openai_actual_upstream_endpoint"
-	// codexCLIVersion 是网关对上游声明的 Codex 客户端版本，同时供 codexCLIUserAgent
-	// 与 version 头使用。上游 /backend-api/codex 会按客户端身份进行风控分层，
-	// 陈旧版本可能被优先丢弃（HTTP 200 + 流内 server_is_overloaded）；非官方客户端配不出
-	// 官方身份时整体回退到本常量，因此它必须跟随官方 CLI 的当前发布版本，
-	// 落后多个版本会让这些请求稳定落在被优先丢弃的一侧。
-	// https://github.com/openai/codex/releases/tag/rust-v0.159.3
-	codexCLIVersion = "0.159.3"
+	// codexCLIVersion 是网关声明的内置兜底版本，供 User-Agent 和 version 头使用。
+	// 此版本应覆盖内置模型的最低版本要求，例如 gpt-6.2-astra 要求 0.166.0。
+	codexCLIVersion = "0.171.0"
 	// Codex 限额快照仅用于后台展示/诊断，不需要每个成功请求都立即落库。
 	openAICodexSnapshotPersistMinInterval = 30 * time.Second
 	// 配额自动暂停时，超过该时长仍未刷新的 used% 快照视为陈旧，不再据此暂停账号。

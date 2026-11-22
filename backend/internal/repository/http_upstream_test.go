@@ -2,10 +2,13 @@ package repository
 
 import (
 	"bytes"
+	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -96,17 +99,100 @@ func TestHTTPUpstreamDoWithTLSPlainHTTPUsesConfiguredSOCKSProxy(t *testing.T) {
 	require.Equal(t, int64(1), upstreamCalls.Load())
 }
 
-func TestTLSFingerprintHTTPSProxyFallsBackWithoutBypassingProxy(t *testing.T) {
-	proxyURL, err := url.Parse("https://user:pass@proxy.example:8443")
+func TestHTTPUpstreamDoWithTLSUsesAuthenticatedHTTPSProxy(t *testing.T) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(upstream.Close)
+	targetURL, err := url.Parse(upstream.URL)
 	require.NoError(t, err)
-	transport, err := buildUpstreamTransportWithTLSFingerprint(poolSettings{}, proxyURL, &tlsfingerprint.Profile{Name: "test"})
+
+	var connects atomic.Int64
+	proxy := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		connects.Add(1)
+		if r.Method != http.MethodConnect || r.Host != targetURL.Host || r.TLS == nil {
+			http.Error(w, "expected CONNECT over TLS", http.StatusBadRequest)
+			return
+		}
+		if r.Header.Get("Proxy-Authorization") != "Basic "+base64.StdEncoding.EncodeToString([]byte("test-user:test-password")) {
+			http.Error(w, "proxy authentication required", http.StatusProxyAuthRequired)
+			return
+		}
+		target, err := (&net.Dialer{}).DialContext(r.Context(), "tcp", targetURL.Host)
+		if err != nil {
+			http.Error(w, "upstream unavailable", http.StatusBadGateway)
+			return
+		}
+		defer target.Close()
+		conn, rw, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		if _, err := rw.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+			return
+		}
+		if err := rw.Flush(); err != nil {
+			return
+		}
+		go func() { _, _ = io.Copy(target, rw); _ = target.Close() }()
+		_, _ = io.Copy(conn, target)
+	}))
+	t.Cleanup(proxy.Close)
+	proxyURL, err := url.Parse(proxy.URL)
 	require.NoError(t, err)
-	require.NotNil(t, transport.Proxy)
-	require.Nil(t, transport.DialTLSContext)
-	req := &http.Request{URL: &url.URL{Scheme: "https", Host: "upstream.example"}}
-	resolved, err := transport.Proxy(req)
+	proxyURL.User = url.UserPassword("test-user", "test-password")
+
+	client := NewHTTPUpstream(nil).(*httpUpstreamService)
+	profile := &tlsfingerprint.Profile{Name: "test"}
+	entry, err := client.getClientEntryWithTLS(proxyURL.String(), 43, 1, profile, service.HTTPUpstreamProfileDefault, false, false)
 	require.NoError(t, err)
-	require.Equal(t, "https://user:pass@proxy.example:8443", resolved.String())
+	transport := entry.client.Transport.(*http.Transport)
+	// Both httptest servers use the same certificate. Trust it for this test.
+	transport.TLSClientConfig = upstream.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+	t.Cleanup(transport.CloseIdleConnections)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, upstream.URL, nil)
+	require.NoError(t, err)
+	resp, err := client.DoWithTLS(req, proxyURL.String(), 43, 1, profile)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	require.Equal(t, http.StatusNoContent, resp.StatusCode)
+	require.EqualValues(t, 1, connects.Load(), "the request must use the configured HTTPS proxy")
+}
+
+func TestHTTPUpstreamDoWithTLSOmitsProxyCredentialsFromDebugLogs(t *testing.T) {
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusProxyAuthRequired)
+	}))
+	t.Cleanup(proxy.Close)
+	proxyURL, err := url.Parse(proxy.URL)
+	require.NoError(t, err)
+	const username, password = "private-proxy-username", "private-proxy-password"
+	proxyURL.User = url.UserPassword(username, password)
+
+	client := NewHTTPUpstream(nil)
+	profile := &tlsfingerprint.Profile{Name: "test"}
+	for _, rawProxy := range []string{proxyURL.String(), proxyURL.String(), strings.Replace(proxyURL.String(), password, password+"%XX", 1)} {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://upstream.example", nil)
+		require.NoError(t, err)
+		_, err = client.DoWithTLS(req, rawProxy, 44, 1, profile)
+		require.Error(t, err)
+		require.NotContains(t, err.Error(), username)
+		require.NotContains(t, err.Error(), password)
+	}
+	require.Contains(t, logs.String(), proxyURL.Host)
+	require.Contains(t, logs.String(), "tls_fingerprint_reusing_client")
+	require.NotContains(t, logs.String(), username)
+	require.NotContains(t, logs.String(), password)
 }
 
 func startTestSOCKS5Proxy(t *testing.T) (string, *atomic.Int64) {

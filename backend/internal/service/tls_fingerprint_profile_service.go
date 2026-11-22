@@ -168,29 +168,49 @@ func (s *TLSFingerprintProfileService) getRandomProfile() *tlsfingerprint.Profil
 	return profiles[rand.IntN(len(profiles))].ToTLSProfile()
 }
 
-// ResolveTLSProfile 根据 Account 的配置解析出运行时 TLS Profile
+// ResolveTLSProfile 根据 Account 的配置解析出运行时 TLS Profile。
 //
-// 逻辑：
-//  1. 未启用 TLS 指纹 → 返回 nil（不伪装）
-//  2. 启用 + 绑定了 profile_id → 从缓存查找对应 profile
-//  3. 启用 + 未绑定或找不到 → 返回空 Profile（使用代码内置默认值）
+//  1. Anthropic OAuth/SetupToken → 恒返回非 nil（强制伪装，见 anthropicOAuthTLSProfile）
+//  2. 其他平台 → 恒返回 nil（保持各平台原有传输路径）
+//
+// 不存在「Anthropic OAuth 但关闭 TLS 指纹」这种状态：伪造的 HTTP 头与 Go 原生
+// TLS 同时出现，比完全不伪装更容易被判定为第三方。
 func (s *TLSFingerprintProfileService) ResolveTLSProfile(account *Account) *tlsfingerprint.Profile {
-	if account == nil || !account.IsTLSFingerprintEnabled() {
+	if account == nil {
 		return nil
 	}
-	id := account.GetTLSFingerprintProfileID()
-	if id > 0 {
+	// Anthropic OAuth 路径恒开：UA/billing/Stainless 头已经无条件自称 Claude Code，
+	// 传输层必须同步，否则请求自相矛盾。此路径没有关闭入口。
+	if account.IsAnthropicOAuthOrSetupToken() {
+		return s.anthropicOAuthTLSProfile(account)
+	}
+	// 非 Anthropic 账号保持各平台原有传输路径。
+	return nil
+}
+
+// anthropicOAuthTLSProfile 解析 Anthropic OAuth/SetupToken 账号的 TLS 指纹。
+//
+// 为什么恒开：OAuth 路径上 buildUpstreamRequest / applyClaudeCodeMimicHeaders 会
+// 无条件把 User-Agent、X-Stainless-*、billing attribution block 伪造成官方 CLI。
+// 若传输层退回 Go 原生 crypto/tls，上游会同时看到「声称是 Node 24 的 HTTP 头」和
+// 「Go 的 JA3/JA4」，这种跨层不一致比完全不伪装更容易被判定为第三方，且请求头写得
+// 越像官方 CLI，矛盾越确定。所以这里不存在「关闭」分支。
+//
+// 账号绑定了 profile_id（含 -1 表示随机挑选注册表中的模板）时优先使用；未绑定或
+// 解析失败则回落到内置 Node 24.x 默认值（utls 空 spec）。因此恒返回非 nil。
+func (s *TLSFingerprintProfileService) anthropicOAuthTLSProfile(account *Account) *tlsfingerprint.Profile {
+	if s == nil {
+		return &tlsfingerprint.Profile{Name: "Built-in Default (Node.js 24.x)"}
+	}
+	if id := account.GetTLSFingerprintProfileID(); id > 0 {
 		if p := s.GetProfileByID(id); p != nil {
 			return p
 		}
-	}
-	if id == -1 {
-		// 随机选择一个 profile
+	} else if id == -1 {
 		if p := s.getRandomProfile(); p != nil {
 			return p
 		}
 	}
-	// TLS 启用但无绑定 profile → 空 Profile → dialer 使用内置默认值
 	return &tlsfingerprint.Profile{Name: "Built-in Default (Node.js 24.x)"}
 }
 

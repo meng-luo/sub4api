@@ -2542,24 +2542,18 @@ func (a *Account) IsAnthropicOAuthOrSetupToken() bool {
 	return a.Platform == PlatformAnthropic && (a.Type == AccountTypeOAuth || a.Type == AccountTypeSetupToken)
 }
 
-// IsTLSFingerprintEnabled 检查是否启用 TLS 指纹伪装
-// 仅适用于 Anthropic OAuth/SetupToken 类型账号
-// 启用后将模拟 Claude Code (Node.js) 客户端的 TLS 握手特征
-func (a *Account) IsTLSFingerprintEnabled() bool {
-	// 仅支持 Anthropic OAuth/SetupToken 账号
-	if !a.IsAnthropicOAuthOrSetupToken() {
-		return false
-	}
-	if a.Extra == nil {
-		return false
-	}
-	if v, ok := a.Extra["enable_tls_fingerprint"]; ok {
-		if enabled, ok := v.(bool); ok {
-			return enabled
-		}
-	}
-	return false
-}
+// 已移除 IsTLSFingerprintEnabled。
+//
+// 历史上 TLS 指纹伪装是一个可选开关（extra.enable_tls_fingerprint）。该开关与
+// OAuth 伪装路径的行为相矛盾：buildUpstreamRequest / applyClaudeCodeMimicHeaders
+// 会无条件把 User-Agent、X-Stainless-*、billing attribution block 伪造成官方
+// claude-cli，与开关无关。开关关闭时，上游会同时看到「自称 Node 24 的 HTTP 头」
+// 和 Go 原生 crypto/tls 的 JA3/JA4 —— 这种跨层不一致比完全不伪装更确定地被判定
+// 为第三方，且请求头伪装得越完整，矛盾越明显。
+//
+// 因此 TLS 指纹在 Anthropic OAuth/SetupToken 路径上恒为开启，由
+// TLSFingerprintProfileService.ResolveTLSProfile 强制解析（不再读该 extra 字段）。
+// 存量账号 extra 里残留的 enable_tls_fingerprint 会被忽略，无需迁移。
 
 // GetTLSFingerprintProfileID 获取账号绑定的 TLS 指纹模板 ID
 // 返回 0 表示未绑定（使用内置默认 profile）
