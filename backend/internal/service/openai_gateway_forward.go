@@ -141,6 +141,10 @@ func (s *OpenAIGatewayService) forwardWithoutHostedWebSearch(ctx context.Context
 	if compactPath {
 		// The compact endpoint is unary HTTP, not a WS response.create turn.
 		wsDecision = openAIWSHTTPDecision("compact_http")
+	} else if s.pluginManager.useHTTPForOpenAIOAuthPlugin(account) {
+		// The plugin handles HTTP. Keep the request on that path so RoundTrip can
+		// use the binding or reject the request when a binding is required.
+		wsDecision = openAIWSHTTPDecision("oauth_transport_plugin")
 	}
 	if wsDecision.Transport == OpenAIUpstreamTransportResponsesWebsocketV2 &&
 		s.shouldBridgeOpenAIWSHTTP(account, len(body), gjson.GetBytes(body, "previous_response_id").String()) {

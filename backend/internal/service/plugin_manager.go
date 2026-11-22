@@ -950,16 +950,11 @@ func (m *PluginManager) ReadUIAsset(ctx context.Context, id int64, relative stri
 const errOpenAIOAuthPluginNotBound = "OpenAI OAuth 账号未命中出站插件，按配置拒绝回落"
 
 func (m *PluginManager) RoundTripOpenAIOAuth(ctx context.Context, request *http.Request, proxyURL string, account *Account) (*http.Response, bool, error) {
-	// fail-closed：部署者显式要求 OAuth 出站必须经插件时，未命中插件的账号
-	// 不再静默回落到内置 Go 传输层（那会让同一批账号呈现两种网络指纹）。
-	if m.MissingOpenAIOAuthPluginBinding(account) {
-		return nil, true, errors.New(errOpenAIOAuthPluginNotBound)
-	}
-	if !m.ShouldRouteOpenAIOAuth(account) {
-		return nil, false, nil
-	}
-	route := m.route.Load()
+	route := m.openAIOAuthPluginRoute(account)
 	if route == nil {
+		if m.requiresOpenAIOAuthPlugin(account) {
+			return nil, true, errors.New(errOpenAIOAuthPluginNotBound)
+		}
 		return nil, false, nil
 	}
 	if route.runtime == nil {
@@ -997,7 +992,7 @@ func (m *PluginManager) requiresOpenAIOAuthPlugin(account *Account) bool {
 	if !m.cfg.Plugins.RequireOpenAIOAuthPlugin {
 		return false
 	}
-	return account.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth && account.IsOpenAIOAuthLike()
+	return account.IsOpenAIOAuth()
 }
 
 // MissingOpenAIOAuthPluginBinding 报告该账号是否「按部署配置必须经插件出站、但当前
@@ -1007,14 +1002,27 @@ func (m *PluginManager) MissingOpenAIOAuthPluginBinding(account *Account) bool {
 	return m.requiresOpenAIOAuthPlugin(account) && !m.ShouldRouteOpenAIOAuth(account)
 }
 
+// useHTTPForOpenAIOAuthPlugin keeps both ingress paths on the HTTP transport
+// whenever the account uses the plugin or must use it. RoundTrip enforces the
+// requirement again against the route in effect when the request is sent.
+func (m *PluginManager) useHTTPForOpenAIOAuthPlugin(account *Account) bool {
+	return m.requiresOpenAIOAuthPlugin(account) || m.ShouldRouteOpenAIOAuth(account)
+}
+
 // ShouldRouteOpenAIOAuth 判断该账号是否命中当前 OpenAI OAuth 插件绑定。
-// WebSocket 入口用它把命中的账号切换到 HTTP Bridge，避免绕过 v1 HTTP 插件协议。
 func (m *PluginManager) ShouldRouteOpenAIOAuth(account *Account) bool {
-	if m == nil || account == nil || account.Platform != PlatformOpenAI || account.Type != AccountTypeOAuth {
-		return false
+	return m.openAIOAuthPluginRoute(account) != nil
+}
+
+func (m *PluginManager) openAIOAuthPluginRoute(account *Account) *pluginRoute {
+	if m == nil || account == nil || !account.IsOpenAIOAuth() {
+		return nil
 	}
 	route := m.route.Load()
-	return route != nil && route.rolloutPercent > 0 && int(stablePluginBucket(account.ID)) < route.rolloutPercent
+	if route == nil || int(stablePluginBucket(account.ID)) >= route.rolloutPercent {
+		return nil
+	}
+	return route
 }
 
 func (m *PluginManager) markRuntimeUnavailable(failedRoute *pluginRoute, message string) error {

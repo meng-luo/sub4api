@@ -120,6 +120,7 @@ jobs:
             org.opencontainers.image.created=${{ steps.meta.outputs.date }}
           cache-from: type=gha,scope=docker-image
           cache-to: type=gha,mode=max,scope=docker-image
+          no-cache-filters: plugin-signing
 
       - name: Write summary
         env:

@@ -212,12 +212,12 @@ make plugin-package-all    # darwin/linux × amd64/arm64
 
 ```bash
 # 已签名包：私钥通过 build secret 传入，且必须显式 PLUGIN_SIGN=1
-docker build --build-arg PLUGIN_SIGN=1 \
+docker buildx build --load --no-cache-filter plugin-signing --build-arg PLUGIN_SIGN=1 \
   --secret id=plugin_signing_key,src="$HOME/.sub4api/plugin-signing.key" -t sub2api:prod .
 docker create --name pkg sub2api:prod && docker cp pkg:/app/plugin-packages/sub4api-openai-transport-0.1.0.s2plugin . && docker rm pkg
 ```
 
-未传 secret、或 `PLUGIN_SIGN=0`（默认）时镜像内是未签名包，只能在 `plugins.allow_unsigned: true` 的调试环境安装；`PLUGIN_SIGN=1` 却没给 secret 会让构建直接失败，避免“以为签了其实没签”。CI 用仓库 secret `PLUGIN_SIGNING_KEY` 自动决定这两者。`PLUGIN_VERSION` 可用 `--build-arg` 覆盖。插件版本与宿主版本独立，不需要跟随 `VERSION`。
+`PLUGIN_SIGN=0` 是默认值，产出的未签名包可在启用 `plugins.allow_unsigned: true` 的调试环境安装。`PLUGIN_SIGN=1` 需要提供私钥 secret。签名构建用 `--no-cache-filter plugin-signing` 重新执行签名，密钥轮换时仍可复用编译产物。CI 根据仓库 secret `PLUGIN_SIGNING_KEY` 决定是否签名。`PLUGIN_VERSION` 可用 `--build-arg` 覆盖，独立于宿主的 `VERSION`。
 
 ## 10. 发布前检查清单
 

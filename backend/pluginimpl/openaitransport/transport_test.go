@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestTransportHTTP2RoundTrip 验证：rustls 形态 ClientHello 能完成握手、
@@ -52,6 +55,74 @@ func TestTransportHTTP2RoundTrip(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if !bytes.Contains(body, []byte("data: ok")) {
 		t.Fatalf("响应体异常: %q", body)
+	}
+}
+
+func TestHTTPProxyConnectSendsProxyAuthorization(t *testing.T) {
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect || r.Host != "upstream.test:443" {
+			t.Errorf("unexpected proxy request: %s %s", r.Method, r.Host)
+		}
+		if r.Header.Get("Authorization") != "" || r.Header.Get("Proxy-Authorization") != "Basic dXNlcjpwYXNz" {
+			w.WriteHeader(http.StatusProxyAuthRequired)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer proxy.Close()
+
+	d, err := newDialer(DefaultConfig(), "http://user:pass@"+proxy.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	conn, err := d.dialHTTPProxy(ctx, "upstream.test:443")
+	if err != nil {
+		t.Fatalf("CONNECT with valid proxy credentials: %v", err)
+	}
+	_ = conn.Close()
+}
+
+func TestTransportConnectionSetupHonorsHandshakeTimeout(t *testing.T) {
+	for _, useProxy := range []bool{false, true} {
+		name := "TLS"
+		if useProxy {
+			name = "proxy CONNECT"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			// Leave TCP connections in the accept queue without replying.
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = listener.Close() }()
+
+			target := "https://" + listener.Addr().String()
+			var proxyURL string
+			if useProxy {
+				proxyURL = "http://" + listener.Addr().String()
+				target = "https://upstream.test"
+			}
+			cfg := DefaultConfig()
+			cfg.HandshakeTimeoutSec = 1
+			transport, _, err := newTransport(cfg, proxyURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer transport.CloseIdleConnections()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+			defer cancel()
+			resp, err := transport.RoundTrip(mustRequest(t, target, "{}").WithContext(ctx))
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+			if !errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+				t.Fatalf("expected connection setup to time out before the request context, got %v (context: %v)", err, ctx.Err())
+			}
+		})
 	}
 }
 

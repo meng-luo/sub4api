@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"fmt"
 	"net"
 	"net/http"
@@ -26,7 +27,7 @@ type dialer struct {
 func newDialer(cfg Config, proxyURL string) (*dialer, error) {
 	d := &dialer{
 		cfg:   cfg,
-		base:  &net.Dialer{Timeout: cfg.handshakeTimeout(), KeepAlive: 30 * time.Second},
+		base:  &net.Dialer{KeepAlive: 30 * time.Second},
 		alpns: alpnFor(cfg.HTTP2),
 	}
 	raw := strings.TrimSpace(proxyURL)
@@ -48,8 +49,15 @@ func newDialer(cfg Config, proxyURL string) (*dialer, error) {
 
 // dialTLSContext 供 http.Transport 回调使用。
 func (d *dialer) dialTLSContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	// http.Transport leaves the connection setup deadline to a custom dialer.
+	ctx, cancel := context.WithTimeout(ctx, d.cfg.handshakeTimeout())
+	defer cancel()
+
 	rawConn, err := d.dialRaw(ctx, network, addr)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, err
 	}
 	host := hostOnly(addr)
@@ -90,10 +98,15 @@ func (d *dialer) dialRaw(ctx context.Context, network, addr string) (net.Conn, e
 
 // dialHTTPProxy 通过 HTTP(S) 代理的 CONNECT 建立隧道。
 func (d *dialer) dialHTTPProxy(ctx context.Context, target string) (net.Conn, error) {
-	conn, err := d.base.DialContext(ctx, "tcp", d.proxy.Host)
+	rawConn, err := d.base.DialContext(ctx, "tcp", d.proxy.Host)
 	if err != nil {
 		return nil, fmt.Errorf("连接代理失败: %w", err)
 	}
+	// CONNECT uses plain reads and writes, which do not observe ctx themselves.
+	stop := context.AfterFunc(ctx, func() { _ = rawConn.Close() })
+	defer stop()
+
+	conn := rawConn
 	if strings.EqualFold(d.proxy.Scheme, "https") {
 		tlsConn := tls.Client(conn, &tls.Config{ServerName: hostOnly(d.proxy.Host), MinVersion: tls.VersionTLS12})
 		if err := tlsConn.HandshakeContext(ctx); err != nil {
@@ -111,7 +124,8 @@ func (d *dialer) dialHTTPProxy(ctx context.Context, target string) (net.Conn, er
 	}
 	if d.proxy.User != nil {
 		pass, _ := d.proxy.User.Password()
-		req.SetBasicAuth(d.proxy.User.Username(), pass)
+		auth := base64.StdEncoding.EncodeToString([]byte(d.proxy.User.Username() + ":" + pass))
+		req.Header.Set("Proxy-Authorization", "Basic "+auth)
 	}
 	req.Header.Set("Proxy-Connection", "Keep-Alive")
 	if err := req.Write(conn); err != nil {
@@ -125,8 +139,8 @@ func (d *dialer) dialHTTPProxy(ctx context.Context, target string) (net.Conn, er
 		return nil, fmt.Errorf("读取 CONNECT 响应失败: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		_ = resp.Body.Close()
 		_ = conn.Close()
+		_ = resp.Body.Close()
 		return nil, fmt.Errorf("代理 CONNECT 被拒绝: %s", resp.Status)
 	}
 	if br.Buffered() > 0 {
@@ -211,7 +225,6 @@ func newTransport(cfg Config, proxyURL string) (*http.Transport, *dialer, error)
 		MaxConnsPerHost:       cfg.MaxConnsPerHost,
 		IdleConnTimeout:       cfg.idleConnTimeout(),
 		ResponseHeaderTimeout: cfg.responseHeaderTimeout(),
-		TLSHandshakeTimeout:   cfg.handshakeTimeout(),
 		// 与官方 hyper 客户端对齐：不主动发健康 PING（SendPingTimeout=0）。
 		HTTP2: http2ConfigFor(cfg),
 	}

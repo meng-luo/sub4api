@@ -3,9 +3,11 @@ package service
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/MACOS-DO/sub4api/internal/config"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -62,6 +64,47 @@ func TestPluginManagerRoundTripRejectsUnboundOAuthWhenRequired(t *testing.T) {
 	assert.Nil(t, response)
 	assert.False(t, handled, "开关关闭时保持旧的静默回落")
 	assert.NoError(t, routeErr)
+}
+
+func TestOpenAIHTTPIngressRoutesWebSocketEnabledOAuthThroughPluginPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name, wantError string
+		requirePlugin   bool
+		route           *pluginRoute
+	}{
+		{"required, no binding", errOpenAIOAuthPluginNotBound, true, nil},
+		{"bound, plugin unavailable", "test plugin is offline", false, &pluginRoute{
+			pluginID: 7, rolloutPercent: 100, unavailable: "test plugin is offline",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := passthroughLifecycleConfig()
+			cfg.Gateway.OpenAIWS.OAuthEnabled = true
+			cfg.Plugins.RequireOpenAIOAuthPlugin = tc.requirePlugin
+			manager := &PluginManager{cfg: cfg}
+			manager.route.Store(tc.route)
+			upstream := &pluginRoutingHTTPUpstream{}
+			svc := &OpenAIGatewayService{cfg: cfg, pluginManager: manager, httpUpstream: upstream}
+			account := &Account{
+				ID: 8, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
+				Credentials: map[string]any{"access_token": "test-token", "chatgpt_account_id": "test-account"},
+				Extra:       map[string]any{"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeCtxPool},
+			}
+			require.Equal(t, OpenAIUpstreamTransportResponsesWebsocketV2, NewOpenAIWSProtocolResolver(cfg).Resolve(account).Transport)
+
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+			body := []byte(`{"model":"gpt-5.1","stream":true,"instructions":"Say hello","input":"hello"}`)
+			_, err := svc.Forward(c.Request.Context(), c, account, body)
+
+			var failover *UpstreamFailoverError
+			require.ErrorAs(t, err, &failover)
+			require.Contains(t, c.GetString(OpsUpstreamErrorMessageKey), tc.wantError)
+			require.Zero(t, upstream.doCalls)
+			require.Nil(t, svc.openaiWSPool)
+		})
+	}
 }
 
 // WebSocket 入口必须与 HTTP 面同样 fail-closed：未绑定的 OAuth 账号不允许

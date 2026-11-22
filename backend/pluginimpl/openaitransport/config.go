@@ -8,7 +8,6 @@ package openaitransport
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -141,5 +140,3 @@ func (c Config) marshal() []byte {
 	}
 	return out
 }
-
-var errNotConfigured = errors.New("插件尚未应用配置")

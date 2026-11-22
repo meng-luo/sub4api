@@ -102,26 +102,26 @@ RUN --mount=type=cache,id=sub2api-gomod,target=/go/pkg/mod \
 # Build the self-hosted OpenAI transport plugin package (.s2plugin) for the same
 # target arch, so the image ships an installable artifact instead of requiring a
 # manual build on the deploy host.
-# 签名是可选步骤：--build-arg PLUGIN_SIGN=1 且传入私钥时产出已签名包；
-# 默认（PLUGIN_SIGN=0）为未签名包。sign.py 依赖 python-cryptography（构建阶段已装）。
-#
-# PLUGIN_SIGN 必须显式置 1 才会签名；置 1 却拿不到私钥时直接失败，不静默降级。
-#
-# 私钥必须走 BuildKit secret，不能用 build-arg：实测 build-arg 的值会以明文
-# 出现在镜像 history（docker history --no-trunc）里，等于把私钥随镜像发出去。
 ARG PLUGIN_VERSION=0.1.0
+RUN --mount=type=cache,id=sub2api-gomod,target=/go/pkg/mod \
+    --mount=type=cache,id=sub2api-gobuild,target=/root/.cache/go-build \
+    VERSION="${PLUGIN_VERSION}" OUT=/app/plugin-dist \
+    bash ./pluginimpl/openaitransport/package/build.sh "linux-${TARGETARCH:-$(go env GOARCH)}"
+
+# BuildKit excludes secret contents from its cache key. Use
+# --no-cache-filter plugin-signing for signed builds to keep signing fresh
+# while reusing the compiled unsigned package.
+FROM backend-builder AS plugin-signing
 ARG PLUGIN_SIGN=0
 RUN --mount=type=secret,id=plugin_signing_key,required=false \
-    --mount=type=cache,id=sub2api-gomod,target=/go/pkg/mod \
-    --mount=type=cache,id=sub2api-gobuild,target=/root/.cache/go-build \
     if [ "${PLUGIN_SIGN}" = "1" ]; then \
         if [ ! -s /run/secrets/plugin_signing_key ]; then \
             echo "PLUGIN_SIGN=1 但未提供 build secret plugin_signing_key" >&2; exit 1; \
         fi; \
-        export SIGN_KEY=/run/secrets/plugin_signing_key; \
-    fi; \
-    VERSION="${PLUGIN_VERSION}" OUT=/app/plugin-dist \
-    bash ./pluginimpl/openaitransport/package/build.sh "linux-${TARGETARCH:-$(go env GOARCH)}"
+        python3 ./pluginimpl/openaitransport/package/sign.py \
+            "/app/plugin-dist/sub4api-openai-transport-${PLUGIN_VERSION}.s2plugin" \
+            /run/secrets/plugin_signing_key; \
+    fi
 
 # -----------------------------------------------------------------------------
 # Stage 3: PostgreSQL Client (version-matched with docker-compose)
@@ -169,8 +169,8 @@ COPY --from=backend-builder --chown=sub2api:sub2api /app/sub2api /app/sub2api
 COPY --from=backend-builder --chown=sub2api:sub2api /app/backend/resources /app/resources
 
 # 插件包产物（.s2plugin + 解包目录）。安装：管理页 → 插件 → 上传，
-# 或用 docker cp 从容器取出。签名包需 --build-arg PLUGIN_SIGN=1 + build secret。
-COPY --from=backend-builder --chown=sub2api:sub2api /app/plugin-dist/ /app/plugin-packages/
+# 或用 docker cp 从容器取出。
+COPY --from=plugin-signing --chown=sub2api:sub2api /app/plugin-dist/ /app/plugin-packages/
 
 # Create data directory
 RUN mkdir -p /app/data && chown sub2api:sub2api /app /app/data

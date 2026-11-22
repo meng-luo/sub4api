@@ -92,8 +92,8 @@ make plugin-package-all    # darwin-arm64 darwin-amd64 linux-amd64 linux-arm64
 docker build -t sub2api:dev .
 
 # 已签名包：私钥作为 build secret 传入，并且必须显式 PLUGIN_SIGN=1
-# （secret 内容不参与层缓存键，不显式开启会命中未签名旧层）
-docker build --build-arg PLUGIN_SIGN=1 \
+# 单独禁用签名阶段的缓存，密钥轮换时仍可复用编译产物
+docker buildx build --load --no-cache-filter plugin-signing --build-arg PLUGIN_SIGN=1 \
   --secret id=plugin_signing_key,src="$HOME/.sub4api/plugin-signing.key" -t sub2api:prod .
 
 # 取出镜像内的包后按上面 1~3 步上传
