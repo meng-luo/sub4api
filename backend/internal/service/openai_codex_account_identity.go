@@ -290,7 +290,9 @@ func applyCodexAccountIdentityClientMetadataRaw(body []byte, account *Account, a
 	if len(body) == 0 || codexAccountIdentityNamespace(account) == "" {
 		return body, false, nil
 	}
-	root := gjson.ParseBytes(body)
+	// parseRawJSONView 走 unsafe 零拷贝视图：gjson.ParseBytes 会把
+	// []byte 转成 string 从而为整个请求体复制一份（最大数十 MB）。
+	root := parseRawJSONView(body)
 	if !root.IsObject() {
 		return body, false, nil
 	}

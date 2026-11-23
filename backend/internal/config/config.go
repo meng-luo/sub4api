@@ -1063,8 +1063,69 @@ const (
 	CodexRequestCompressionBySize = "by_size"
 )
 
-// DefaultCodexRequestCompressionMinBytes by_size 模式的默认阈值（8 MiB，按未压缩 body 计）。
-const DefaultCodexRequestCompressionMinBytes int64 = 8 << 20
+// DefaultCodexRequestCompressionMinBytes by_size 模式的默认阈值（256 KiB，按未压缩 body 计）。
+//
+// 阈值取 256 KiB 而非 8 MiB 的依据（实测，zstd 单线程）：
+//   - 256 KiB → 编码 ~3.2 ms，省下 ~191 KiB 上传
+//   - 2 MiB   → 编码 ~7.1 ms，省下 ~1.5 MiB 上传
+//   - 30 MiB  → 编码 ~91 ms，省下 ~22.5 MiB 上传
+//
+// 20 Mbps 跨境上行下 1.5 MiB 约等于 600 ms 等待，回报比约 85:1；编码成本相对
+// 同请求体内的出站改写（2 MiB 约 40 ms）可忽略。压缩失败始终静默回退明文。
+const DefaultCodexRequestCompressionMinBytes int64 = 256 << 10
+
+// OpenAI WebSocket permessage-deflate 策略
+// （gateway.openai_ws.ingress_compression / gateway.openai_ws.upstream_compression）。
+//
+// 取舍依据（实测，Apple M4）：
+//   - 同机 loopback TCP 吞吐 5.6~6.6 GiB/s，一条 800 帧典型回复流原始 203 KB，
+//     传输约 30~40 µs；context_takeover 可压到 14%（省约 175 KB ≈ 33 µs），
+//     但压缩本身要 2.5 ms CPU —— 同机/同 Docker network 下净亏约 75 倍。
+//   - 每个协商成功的连接每个方向常驻一个 flate.Writer（实测约 0.8 MB，
+//     coder/websocket 文档标称 1.2 MB），1000 并发即 GB 级堆占用。
+//   - 无 context takeover 时小帧反而膨胀到 80%~101%，且 writer 内存一分不少。
+//
+// 因此：同 Docker network 的内部跳应设为 disabled；只有跨公网链路才值得开。
+const (
+	// OpenAIWSCompressionDisabled 不协商 permessage-deflate（coder/websocket 自身的默认值）。
+	OpenAIWSCompressionDisabled = "disabled"
+	// OpenAIWSCompressionContextTakeover 协商压缩并跨消息复用 32 KB deflate 窗口。
+	OpenAIWSCompressionContextTakeover = "context_takeover"
+	// DefaultOpenAIWSCompression 保持本项配置引入前的历史行为：两条腿都协商压缩。
+	DefaultOpenAIWSCompression = OpenAIWSCompressionContextTakeover
+)
+
+// NormalizeOpenAIWSCompressionMode 归一化 WebSocket 压缩策略配置值。
+// 空值返回历史默认（DefaultOpenAIWSCompression）；无法识别的值返回空串，
+// 由 Validate 在启动阶段直接报错，避免静默改变线上握手行为。
+func NormalizeOpenAIWSCompressionMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "":
+		return DefaultOpenAIWSCompression
+	case OpenAIWSCompressionContextTakeover, "context", "on", "enabled":
+		return OpenAIWSCompressionContextTakeover
+	case OpenAIWSCompressionDisabled, "off", "none":
+		return OpenAIWSCompressionDisabled
+	default:
+		return ""
+	}
+}
+
+// EffectiveIngressCompression 返回客户端 → 本服务 这条腿实际生效的压缩策略。
+func (c GatewayOpenAIWSConfig) EffectiveIngressCompression() string {
+	if mode := NormalizeOpenAIWSCompressionMode(c.IngressCompression); mode != "" {
+		return mode
+	}
+	return DefaultOpenAIWSCompression
+}
+
+// EffectiveUpstreamCompression 返回本服务 → 上游 这条腿实际生效的压缩策略。
+func (c GatewayOpenAIWSConfig) EffectiveUpstreamCompression() string {
+	if mode := NormalizeOpenAIWSCompressionMode(c.UpstreamCompression); mode != "" {
+		return mode
+	}
+	return DefaultOpenAIWSCompression
+}
 
 // Codex turn metadata 的沙箱身份取值（gateway.codex_identity.sandbox / sandbox_mode）。
 const (
@@ -1083,7 +1144,8 @@ const (
 type GatewayCodexConfig struct {
 	// RequestCompression 请求体压缩模式：off | on | by_size，默认 by_size。
 	RequestCompression string `mapstructure:"request_compression"`
-	// RequestCompressionMinBytes by_size 模式的阈值（按未压缩 body 字节数），默认 8 MiB。
+	// RequestCompressionMinBytes by_size 模式的阈值（按未压缩 body 字节数）。
+	// 默认值取 DefaultCodexRequestCompressionMinBytes（256 KiB）。
 	RequestCompressionMinBytes int64 `mapstructure:"request_compression_min_bytes"`
 }
 
@@ -1505,6 +1567,17 @@ type GatewayOpenAIWSConfig struct {
 	HTTPBridgeEnabled bool `mapstructure:"http_bridge_enabled"`
 	// HTTPBridgeThresholdBytes: 触发 HTTP bridge 的入站 WS payload 阈值。
 	HTTPBridgeThresholdBytes int64 `mapstructure:"http_bridge_threshold_bytes"`
+	// IngressCompression: 客户端 → 本服务 这条腿的 permessage-deflate 策略。
+	//   disabled         —— 不协商压缩。同机 / 同 Docker network / 同宿主反代接入时应选它：
+	//                       该链路上带宽不是瓶颈，压缩只花 CPU 并额外常驻每连接每方向约 0.8 MB。
+	//   context_takeover —— 协商并跨消息复用 deflate 窗口；仅跨公网接入时才有净收益。
+	// 为空时回落 DefaultOpenAIWSCompression（context_takeover），升级前后行为一致。
+	IngressCompression string `mapstructure:"ingress_compression"`
+	// UpstreamCompression: 本服务 → 上游（chatgpt.com）这条腿的 permessage-deflate 策略。
+	// 这是唯一真正跨公网的链路，压缩理论上省下的下行字节最多；但真实 Codex 客户端是否
+	// 在 WS 握手中声明 permessage-deflate 仍需抓包确认，改动前请先核对握手特征。
+	// 为空时回落 DefaultOpenAIWSCompression（context_takeover）。
+	UpstreamCompression string `mapstructure:"upstream_compression"`
 
 	// Feature 开关：v2 优先于 v1
 	ResponsesWebsockets   bool `mapstructure:"responses_websockets"`
@@ -2769,6 +2842,10 @@ func setDefaults() {
 	viper.SetDefault("gateway.gemini_debug_response_headers", false)
 	viper.SetDefault("gateway.gemini_cached_content_max_ttl_seconds", 86400)
 	viper.SetDefault("gateway.connection_pool_isolation", ConnectionPoolIsolationAccountProxy)
+	// 注册 WS 两腿压缩策略的默认值：viper 的 AutomaticEnv 只对已登记的键生效，
+	// 没有默认值的嵌套键无法从 GATEWAY_OPENAI_WS_*_COMPRESSION 覆盖。
+	viper.SetDefault("gateway.openai_ws.ingress_compression", DefaultOpenAIWSCompression)
+	viper.SetDefault("gateway.openai_ws.upstream_compression", DefaultOpenAIWSCompression)
 	viper.SetDefault("gateway.codex.request_compression", CodexRequestCompressionBySize)
 	viper.SetDefault("gateway.codex.request_compression_min_bytes", DefaultCodexRequestCompressionMinBytes)
 	viper.SetDefault("gateway.codex_identity.emit_version_header", false)
@@ -3590,6 +3667,14 @@ func (c *Config) Validate() error {
 	}
 	if c.Idempotency.CleanupBatchSize <= 0 {
 		return fmt.Errorf("idempotency.cleanup_batch_size must be positive")
+	}
+	if mode := NormalizeOpenAIWSCompressionMode(c.Gateway.OpenAIWS.IngressCompression); mode == "" {
+		return fmt.Errorf("gateway.openai_ws.ingress_compression must be one of: %s/%s",
+			OpenAIWSCompressionDisabled, OpenAIWSCompressionContextTakeover)
+	}
+	if mode := NormalizeOpenAIWSCompressionMode(c.Gateway.OpenAIWS.UpstreamCompression); mode == "" {
+		return fmt.Errorf("gateway.openai_ws.upstream_compression must be one of: %s/%s",
+			OpenAIWSCompressionDisabled, OpenAIWSCompressionContextTakeover)
 	}
 	if c.Gateway.MaxBodySize <= 0 {
 		return fmt.Errorf("gateway.max_body_size must be positive")

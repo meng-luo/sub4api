@@ -7,12 +7,18 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/require"
 
 	"github.com/MACOS-DO/sub4api/internal/config"
 )
 
 const codexCompressionTargetURL = "https://chatgpt.com/backend-api/codex/responses"
+
+// codexCompressionTestThreshold 是 by_size 边界用例显式使用的阈值：这些用例验证的是
+// 「阈值上下的取舍机制」，与 DefaultCodexRequestCompressionMinBytes 的取值解耦，
+// 以免默认阈值调整时连带改动边界样本的体积。
+const codexCompressionTestThreshold int64 = 8 << 20
 
 func newCodexCompressionRequest(t *testing.T, size int) *http.Request {
 	t.Helper()
@@ -39,7 +45,7 @@ func TestCompressCodexResponsesRequestBySizeKeepsSmallBodyPlain(t *testing.T) {
 	const size = 7 * 1024 * 1024
 	req := newCodexCompressionRequest(t, size)
 
-	applied := compressCodexResponsesRequest(req, codexRequestCompression{mode: config.CodexRequestCompressionBySize, minBytes: config.DefaultCodexRequestCompressionMinBytes})
+	applied := compressCodexResponsesRequest(req, codexRequestCompression{mode: config.CodexRequestCompressionBySize, minBytes: codexCompressionTestThreshold})
 	require.False(t, applied)
 	require.Empty(t, req.Header.Get("Content-Encoding"))
 	requireCodexBodyLength(t, req, size)
@@ -50,7 +56,7 @@ func TestCompressCodexResponsesRequestBySizeCompressesLargeBody(t *testing.T) {
 	const size = 9 * 1024 * 1024
 	req := newCodexCompressionRequest(t, size)
 
-	applied := compressCodexResponsesRequest(req, codexRequestCompression{mode: config.CodexRequestCompressionBySize, minBytes: config.DefaultCodexRequestCompressionMinBytes})
+	applied := compressCodexResponsesRequest(req, codexRequestCompression{mode: config.CodexRequestCompressionBySize, minBytes: codexCompressionTestThreshold})
 	require.True(t, applied)
 	require.Equal(t, "zstd", req.Header.Get("Content-Encoding"))
 	require.Less(t, req.ContentLength, int64(size))
@@ -126,7 +132,7 @@ func TestCompressCodexResponsesRequestSkipsNonTargetRequests(t *testing.T) {
 	}
 }
 
-// doUpstreamRequest 的默认策略取配置；服务与配置缺失时回落 by_size + 8 MiB。
+// doUpstreamRequest 的默认策略取配置；服务与配置缺失时回落 by_size + 默认阈值。
 func TestCodexRequestCompressionDefaults(t *testing.T) {
 	require.Equal(t, config.CodexRequestCompressionBySize, defaultCodexRequestCompression().mode)
 	require.Equal(t, config.DefaultCodexRequestCompressionMinBytes, defaultCodexRequestCompression().minBytes)
@@ -152,4 +158,96 @@ func TestCompressCodexResponsesRequestSmallBodyHasNoEncodingHeader(t *testing.T)
 	for name := range req.Header {
 		require.False(t, strings.EqualFold(name, "Content-Encoding"))
 	}
+}
+
+// readCodexCompressedBody 解压请求的线上 body，用于验证压缩字节可还原。
+func readCodexCompressedBody(t *testing.T, req *http.Request) []byte {
+	t.Helper()
+	replay, err := req.GetBody()
+	require.NoError(t, err)
+	defer func() { _ = replay.Close() }()
+	decoder, err := zstd.NewReader(replay)
+	require.NoError(t, err)
+	defer decoder.Close()
+	data, err := io.ReadAll(decoder)
+	require.NoError(t, err)
+	return data
+}
+
+// 流式编码路径必须产出可正确解压的字节；连续多次调用验证池化编码器状态
+// （Reset/Write/Close）在请求之间不会串味。
+func TestCompressCodexResponsesRequestStreamingRoundTrip(t *testing.T) {
+	const size = 9 * 1024 * 1024
+	for attempt := 0; attempt < 3; attempt++ {
+		req := newCodexCompressionRequest(t, size)
+		applied := compressCodexResponsesRequest(req, codexRequestCompression{mode: config.CodexRequestCompressionOn, minBytes: 0})
+		require.True(t, applied, "attempt %d", attempt)
+		require.Equal(t, "zstd", req.Header.Get("Content-Encoding"))
+		require.Less(t, req.ContentLength, int64(size), "attempt %d", attempt)
+		require.Len(t, readCodexCompressedBody(t, req), size, "attempt %d", attempt)
+	}
+}
+
+// 长度未知（ContentLength <= 0）走 EncodeAll 兜底路径，同样必须可还原。
+func TestCompressCodexResponsesRequestUnknownLengthRoundTrip(t *testing.T) {
+	const size = 2 * 1024 * 1024
+	req := newCodexCompressionRequest(t, size)
+	req.ContentLength = -1
+	applied := compressCodexResponsesRequest(req, codexRequestCompression{mode: config.CodexRequestCompressionBySize, minBytes: 1 << 10})
+	require.True(t, applied)
+	require.Equal(t, "zstd", req.Header.Get("Content-Encoding"))
+	require.Len(t, readCodexCompressedBody(t, req), size)
+}
+
+// 并发压缩：共享单例只走 EncodeAll，流式编码器走池，两者都不得互相覆盖状态。
+func TestCompressCodexResponsesRequestConcurrent(t *testing.T) {
+	const size = 1 << 20
+	const workers = 8
+	done := make(chan struct{}, workers)
+	for i := 0; i < workers; i++ {
+		go func(index int) {
+			defer func() { done <- struct{}{} }()
+			payload := bytes.Repeat([]byte{byte('a' + index)}, size)
+			req, err := http.NewRequest(http.MethodPost, codexCompressionTargetURL, bytes.NewReader(payload))
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+			if !compressCodexResponsesRequest(req, codexRequestCompression{mode: config.CodexRequestCompressionOn, minBytes: 0}) {
+				t.Errorf("worker %d: compression not applied", index)
+				return
+			}
+			data := readCodexCompressedBody(t, req)
+			if len(data) != size {
+				t.Errorf("worker %d: decoded %d bytes, want %d", index, len(data), size)
+				return
+			}
+			if data[0] != byte('a'+index) {
+				t.Errorf("worker %d: content mismatch across pooled encoder", index)
+			}
+		}(i)
+	}
+	for i := 0; i < workers; i++ {
+		<-done
+	}
+}
+
+// 池化 zstd 编码器归还前应 Reset(io.Discard) 解除对输出缓冲的引用；
+// 归还后仍必须能正确编码，不能因为解除引用而破坏状态。
+func TestCodexZstdPooledEncoderSurvivesReuse(t *testing.T) {
+	first := newCodexCompressionRequest(t, 2<<20)
+	require.True(t, compressCodexResponsesRequest(first, codexRequestCompression{
+		mode:     config.CodexRequestCompressionOn,
+		minBytes: 0,
+	}))
+	require.Equal(t, "zstd", first.Header.Get("Content-Encoding"))
+	require.Len(t, readCodexCompressedBody(t, first), 2<<20)
+
+	second := newCodexCompressionRequest(t, 1<<20)
+	require.True(t, compressCodexResponsesRequest(second, codexRequestCompression{
+		mode:     config.CodexRequestCompressionOn,
+		minBytes: 0,
+	}))
+	require.Len(t, readCodexCompressedBody(t, second), 1<<20)
 }

@@ -79,7 +79,7 @@ func javascriptUTF16CodeUnitAt(text string, index int) (uint16, bool) {
 // extractFirstUserText 提取 messages 中第一条非 meta user 消息的首段 text 内容。
 // 兼容 string 和 []block 两种 content 格式；isMeta/is_meta 消息与官方 CLI 一样跳过。
 func extractFirstUserText(body []byte) string {
-	messages := gjson.GetBytes(body, "messages")
+	messages := lastRootJSONField(body, "messages")
 	if !messages.IsArray() {
 		return ""
 	}

@@ -2609,7 +2609,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	}
 
 	wsConn, err := coderws.Accept(c.Writer, c.Request, &coderws.AcceptOptions{
-		CompressionMode: coderws.CompressionContextTakeover,
+		// 压缩策略由 gateway.openai_ws.ingress_compression 决定：同机 / 同 Docker
+		// network 接入时该跳带宽不是瓶颈，协商压缩只会白花 CPU 并常驻每连接内存。
+		CompressionMode: service.OpenAIWSIngressCompressionMode(),
 	})
 	if err != nil {
 		reqLog.Warn("openai.websocket_accept_failed",

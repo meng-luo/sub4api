@@ -106,6 +106,11 @@ func TestOllamaCloudMaxTokensClamp(t *testing.T) {
 	}
 }
 
+func TestOllamaCloudMaxTokensClampDuplicateUsesLast(t *testing.T) {
+	body := []byte(`{"max_tokens":128,"max_completion_tokens":256,"max_tokens":256000,"max_completion_tokens":512000}`)
+	require.Equal(t, `{"max_tokens":65535,"max_completion_tokens":65535}`, string(clampOllamaCloudMaxTokens(nil, body)))
+}
+
 func TestOllamaCloudMaxTokensCap(t *testing.T) {
 	require.Equal(t, int64(65535), ollamaCloudMaxTokensCap(nil))
 	require.Equal(t, int64(65535), ollamaCloudMaxTokensCap(ollamaUsageAccount(201)))

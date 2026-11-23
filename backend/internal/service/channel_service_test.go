@@ -2034,6 +2034,13 @@ func TestChannelDelete_GetGroupIDsError(t *testing.T) {
 
 // --- 6.4 ReplaceModelInBody with invalid JSON ---
 
+func TestReplaceModelInBodyDuplicateModel(t *testing.T) {
+	body := []byte(`{"model":"first","metadata":{ "number": 9007199254740993 },"\u006dodel":"last"}`)
+	for _, model := range []string{"first", "mapped"} {
+		require.Equal(t, `{"model":"`+model+`","metadata":{ "number": 9007199254740993 }}`, string(ReplaceModelInBody(body, model)))
+	}
+}
+
 func TestReplaceModelInBody_InvalidJSON(t *testing.T) {
 	// Case 1: broken JSON object — gjson won't find "model", sjson does best-effort set
 	// (no panic, no error from sjson, but result is mutated garbage)
@@ -2073,6 +2080,11 @@ func TestRemovePreviousResponseIDFromBody(t *testing.T) {
 		body := []byte(`{"model":"gpt-5","previous_response_id":""}`)
 		result := RemovePreviousResponseIDFromBody(body)
 		require.False(t, gjson.GetBytes(result, "previous_response_id").Exists())
+	})
+
+	t.Run("strips every top-level occurrence", func(t *testing.T) {
+		body := []byte(`{"previous_response_id":"first","input":{"previous_response_id":"keep"},"previous_response_id":"last"}`)
+		require.Equal(t, `{"input":{"previous_response_id":"keep"}}`, string(RemovePreviousResponseIDFromBody(body)))
 	})
 }
 

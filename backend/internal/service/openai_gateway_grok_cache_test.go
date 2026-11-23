@@ -423,6 +423,17 @@ func TestApplyGrokCacheIdentityWritesResponsesBodyAndHeader(t *testing.T) {
 	require.False(t, gjson.GetBytes(unscopedBody, "tool_choice").Exists())
 }
 
+func TestApplyGrokCacheIdentityDuplicateFields(t *testing.T) {
+	body := []byte(`{"prompt_cache_key":"first","tools":[],"tool_choice":"auto","prompt_cache_key":"last","tools":[],"tool_choice":"required"}`)
+	out, err := applyGrokResponsesCacheIdentity(body, []byte(`{"input":[]}`), "isolated-id", true)
+	require.NoError(t, err)
+	require.Equal(t, `{"prompt_cache_key":"isolated-id","tools":`+grokFreeCacheNativeToolsJSON+`,"tool_choice":"none"}`, string(out))
+
+	stripped, err := stripGrokChatPromptCacheKey(body)
+	require.NoError(t, err)
+	require.Equal(t, `{"tools":[],"tool_choice":"auto","tools":[],"tool_choice":"required"}`, string(stripped))
+}
+
 func TestGrokFreeMessagesClientToolCacheDefaultsOnForKnownFree(t *testing.T) {
 	account := healthyGrokOAuthGatewayTestAccount(901, "access-token")
 	account.Credentials["subscription_tier"] = " FREE "

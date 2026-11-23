@@ -105,17 +105,23 @@ func TestOpenAIRequestPatches_LargeUntouchedInputStillBatches(t *testing.T) {
 	require.Equal(t, want, got)
 }
 
-func TestOpenAIRequestPatches_DeletingParentCannotExposeUncheckedDuplicate(t *testing.T) {
-	dense, _ := denseOpenAIRequestPatchFixture(4096, false)
-	body := []byte(`{"model":"old","reasoning":{"effort":"low"},"reasoning":` + string(dense) + `}`)
+func TestOpenAIRequestPatches_DeleteDuplicateParentsBeforeChildEdit(t *testing.T) {
+	body := []byte(`{"model":"old","reasoning":{"effort":"low"},"reasoning":{"opaque":1}}`)
 	patches := []openAIRequestPatch{{path: "reasoning", delete: true}, {path: "reasoning.effort", value: "none"}}
 	view := requestViewWithPatches(body, patches)
-	require.False(t, view.canBatchPatches(), "deleting the first parent exposes a dense duplicate that the original lookup did not inspect")
-	want, err := applyOpenAIRequestPatchesSequential(body, patches)
-	require.NoError(t, err)
+	require.False(t, view.canBatchPatches())
 	got, err := view.ApplyPatches(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, want, got)
+	require.Equal(t, `{"model":"old","reasoning":{"effort":"none"}}`, string(got))
+}
+
+func TestOpenAIRequestPatches_ReplaceDuplicateRootKeys(t *testing.T) {
+	body := []byte(`{"model":"old", "previous_response_id":"first","opaque":1,"previous_response_id":"second","\u006dodel":"other","opaque":2}`)
+	patches := []openAIRequestPatch{{path: "model", value: "mapped"}, {path: "previous_response_id", delete: true}}
+	view := requestViewWithPatches(body, patches)
+	got, err := view.ApplyPatches(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, `{"model":"mapped","opaque":1,"opaque":2}`, string(got))
 }
 
 func repeatedNestedOpenAIRequestPatchFixture() ([]byte, []openAIRequestPatch) {
@@ -158,16 +164,6 @@ func TestOpenAIRequestPatches_PreserveSequentialWireBehavior(t *testing.T) {
 				{path: "model", value: "new"},
 				{path: "reasoning.effort", value: "none"},
 				{path: "instructions", value: "quoted \"text\"\n你好 <tag>"},
-			},
-		},
-		{
-			name: "duplicate top-level and nested keys",
-			body: `{"model":"first","model":"second","reasoning":{"effort":"low","effort":"high"},"reasoning":{"effort":"max"},"opaque":1,"opaque":2}`,
-			patches: []openAIRequestPatch{
-				{path: "model", value: "mapped"},
-				{path: "reasoning.effort", value: "none"},
-				{path: "model", delete: true},
-				{path: "model", value: "final"},
 			},
 		},
 		{

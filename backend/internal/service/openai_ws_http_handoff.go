@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"sync"
@@ -49,12 +50,25 @@ func (h *openAIWSHTTPHandoffHistory) inputForTurn(payload []byte) ([]json.RawMes
 	if err != nil || !exists || len(items) > openAIWSHTTPHandoffMaxItems {
 		return nil, false, 0
 	}
-	for _, item := range items {
-		if gjson.GetBytes(item, "type").String() == "item_reference" {
-			return nil, false, 0
+	// 逐项 gjson.GetBytes(item, "type") 会对每个 input 项做一次 JSON 对象解析。
+	// 字面量前置只在「原始字节与解码后文本一致」时成立：JSON 允许把标识符写成
+	// \uXXXX 转义，此时 memmem 搜不到但解码后仍是 item_reference。一旦出现
+	// \u 转义就放弃前置，按原路径逐项解析。
+	escaped := hasJSONUnicodeEscape(payload)
+	if escaped || bytes.Contains(payload, []byte("item_reference")) {
+		for _, item := range items {
+			if gjson.GetBytes(item, "type").String() == "item_reference" {
+				return nil, false, 0
+			}
 		}
 	}
-	previousID := strings.TrimSpace(gjson.GetBytes(payload, "previous_response_id").String())
+	// previous_response_id 缺失时 gjson 仍要整段扫描一遍才能确认不存在；键字面量
+	// 不在请求体里时该字段必然为空，用一次 memmem 前置省掉这次扫描。键名同样允许
+	// \uXXXX 转义，故 escaped 时无条件整段解析。
+	previousID := ""
+	if escaped || bytes.Contains(payload, []byte("previous_response_id")) {
+		previousID = strings.TrimSpace(gjson.GetBytes(payload, "previous_response_id").String())
+	}
 	coverage := AnalyzeToolCallOutputContextCoverageBytes(payload)
 	needsHistory := previousID != "" || (coverage.HasFunctionCallOutput && !coverage.ContextCoversAllCallIDs)
 	retained := int64(len(payload))

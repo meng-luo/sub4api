@@ -178,6 +178,18 @@ func TestStripOpenAIResponsesInputNamespaces(t *testing.T) {
 	require.Equal(t, gjson.GetBytes(body, "input.0.large").Raw, gjson.GetBytes(stripped, "input.0.large").Raw)
 }
 
+func TestStripOpenAIResponsesInputNamespacesDuplicateKeys(t *testing.T) {
+	body := []byte(`{"input":[],"metadata":{}, "input":[ {"\u006eamespace":"first","type":"message","namespace":"last","content":{"namespace":"keep"}} ]}`)
+	out, err := stripOpenAIResponsesInputNamespaces(body, false)
+	require.NoError(t, err)
+	require.Equal(t, `{"input":[ {"type":"message","content":{"namespace":"keep"}} ],"metadata":{}}`, string(out))
+
+	escaped := []byte(`{"input":[{"\u006eamespace":"drop","type":"message"}]}`)
+	out, err = stripOpenAIResponsesInputNamespaces(escaped, false)
+	require.NoError(t, err)
+	require.Equal(t, `{"input":[{"type":"message"}]}`, string(out))
+}
+
 func TestStripOpenAIResponsesInputNamespacesLeavesOtherShapesByteExact(t *testing.T) {
 	tests := [][]byte{
 		[]byte(`{"input":[],"tools":[{"type":"namespace"}]}`),

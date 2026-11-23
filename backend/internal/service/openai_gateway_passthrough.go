@@ -82,7 +82,7 @@ func needsOpenAIResponsesClientToolAdaptation(body []byte) bool {
 		}
 		return !needsAdaptation
 	}
-	visit(gjson.ParseBytes(body))
+	visit(parseRawJSONView(body))
 	return needsAdaptation
 }
 

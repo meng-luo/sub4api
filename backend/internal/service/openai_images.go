@@ -267,8 +267,8 @@ func (s *OpenAIGatewayService) ParseOpenAIImagesRequest(c *gin.Context, body []b
 }
 
 func parseOpenAIImagesJSONRequest(body []byte, req *OpenAIImagesRequest) error {
-	if modelResult := gjson.GetBytes(body, "model"); modelResult.Exists() {
-		req.Model = strings.TrimSpace(modelResult.String())
+	if modelResult := lastRootJSONField(body, "model"); modelResult.Exists() {
+		req.Model = strings.Clone(strings.TrimSpace(modelResult.String()))
 		req.ExplicitModel = req.Model != ""
 	}
 	req.Prompt = strings.TrimSpace(gjson.GetBytes(body, "prompt").String())
@@ -988,7 +988,7 @@ func rewriteOpenAIImagesModel(body []byte, contentType string, model string) ([]
 		rewrittenBody, rewrittenType, rewriteErr := rewriteOpenAIImagesMultipartModel(body, contentType, model)
 		return rewrittenBody, rewrittenType, rewriteErr
 	}
-	rewritten, err := sjson.SetBytes(body, "model", model)
+	rewritten, err := setRootJSONValue(body, "model", model)
 	if err != nil {
 		return nil, "", fmt.Errorf("rewrite image request model: %w", err)
 	}

@@ -13,8 +13,6 @@ import (
 	"github.com/MACOS-DO/sub4api/internal/pkg/ctxkey"
 	infraerrors "github.com/MACOS-DO/sub4api/internal/pkg/errors"
 	"github.com/MACOS-DO/sub4api/internal/pkg/pagination"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -643,10 +641,10 @@ func ReplaceModelInBody(body []byte, newModel string) []byte {
 	if len(body) == 0 {
 		return body
 	}
-	if current := gjson.GetBytes(body, "model"); current.Exists() && current.String() == newModel {
+	if current, repeated := lastJSONObjectField(parseRawJSONView(body), "model"); !repeated && current.Exists() && current.String() == newModel {
 		return body
 	}
-	newBody, err := sjson.SetBytes(body, "model", newModel)
+	newBody, err := setRootJSONValue(body, "model", newModel)
 	if err != nil {
 		return body
 	}
@@ -658,10 +656,7 @@ func RemovePreviousResponseIDFromBody(body []byte) []byte {
 	if len(body) == 0 {
 		return body
 	}
-	if !gjson.GetBytes(body, "previous_response_id").Exists() {
-		return body
-	}
-	newBody, err := sjson.DeleteBytes(body, "previous_response_id")
+	newBody, err := deleteRootJSONField(body, "previous_response_id")
 	if err != nil {
 		return body
 	}

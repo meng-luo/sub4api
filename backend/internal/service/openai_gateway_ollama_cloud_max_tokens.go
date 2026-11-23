@@ -5,7 +5,6 @@ import (
 
 	"github.com/MACOS-DO/sub4api/internal/pkg/logger"
 	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 	"go.uber.org/zap"
 )
 
@@ -32,7 +31,7 @@ func clampOllamaCloudUpstreamMaxTokens(account *Account, body []byte) []byte {
 	if !isOllamaCloudBaseURL(account.GetOpenAIBaseURL()) {
 		return body
 	}
-	if !isDeepSeekModel(gjson.GetBytes(body, "model").String()) && !isOllamaCloudRawChatCompletionsAccount(account) {
+	if !isDeepSeekModel(lastRootJSONField(body, "model").String()) && !isOllamaCloudRawChatCompletionsAccount(account) {
 		return body
 	}
 	return clampOllamaCloudMaxTokens(account, body)
@@ -62,9 +61,9 @@ func ollamaCloudResponsesMaxOutputTokensClamp(account *Account, upstreamModel st
 	if !isOllamaCloudBaseURL(ollamaCloudResponsesUpstreamBaseURL(account)) {
 		return 0, false
 	}
-	value := gjson.GetBytes(body, "max_output_tokens")
+	value := lastRootJSONField(body, "max_output_tokens")
 	if !value.Exists() && account.Platform == PlatformOpenAI {
-		value = gjson.GetBytes(body, "max_tokens")
+		value = lastRootJSONField(body, "max_tokens")
 	}
 	cap := ollamaCloudMaxTokensCap(account)
 	if cap <= 0 || !value.Exists() || value.Type != gjson.Number || value.Int() <= cap {
@@ -113,11 +112,11 @@ func clampOllamaCloudMaxTokens(account *Account, body []byte) []byte {
 	clamped := false
 	out := body
 	for _, key := range []string{"max_tokens", "max_completion_tokens"} {
-		result := gjson.GetBytes(out, key)
+		result := lastRootJSONField(out, key)
 		if !result.Exists() || result.Type != gjson.Number || result.Int() <= cap {
 			continue
 		}
-		updated, err := sjson.SetBytes(out, key, cap)
+		updated, err := setRootJSONValue(out, key, cap)
 		if err != nil {
 			return body
 		}

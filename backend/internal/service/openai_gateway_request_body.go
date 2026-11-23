@@ -150,12 +150,12 @@ func normalizeDeepSeekResponsesRequestBody(account *Account, body []byte) []byte
 
 	normalized := body
 	if applyStateless {
-		patched, err := sjson.SetBytes(normalized, "store", false)
+		patched, err := setRootJSONValue(normalized, "store", false)
 		if err != nil {
 			return body
 		}
 		normalized = patched
-		if stripped, err := sjson.DeleteBytes(normalized, "previous_response_id"); err == nil {
+		if stripped, err := deleteRootJSONField(normalized, "previous_response_id"); err == nil {
 			normalized = stripped
 		}
 	}
@@ -1245,8 +1245,8 @@ func (v openAIRequestView) ApplyPatches(ctx context.Context) ([]byte, error) {
 }
 
 func (v openAIRequestView) materializePatches() ([]byte, error) {
-	// A single edit already needs only one output buffer. Keep sjson's exact
-	// behavior for it and for inputs outside ojson's compatibility contract.
+	// A single edit already needs only one output buffer. Also use the
+	// sequential path when a root edit needs to handle duplicate members.
 	if len(v.patches) == 1 || !v.canBatchPatches() {
 		return v.applyPatchesSequential()
 	}
@@ -1310,7 +1310,12 @@ func (v openAIRequestView) canBatchPatches() bool {
 	// Borrow the body rather than copying it into a string. The scans below do
 	// not retain results or materialize member maps.
 	root := ojson.Parse(openAIWSPayloadStringView(body))
+	rootEdits := make(map[string]bool, len(v.patches))
 	for _, patch := range v.patches {
+		if !strings.Contains(patch.path, ".") {
+			rootEdits[patch.path] = false
+			continue
+		}
 		for i := 0; i < len(patch.path); i++ {
 			if patch.path[i] != '.' {
 				continue
@@ -1318,14 +1323,14 @@ func (v openAIRequestView) canBatchPatches() bool {
 			parent := root.Get(patch.path[:i])
 			// sjson edits inside string parents differently. Inspect only the
 			// original raw input: Doc.Get can copy an already edited container.
-			if parent.Type == ojson.String || !openAIRequestPatchObjectIsSmall(parent) {
+			if parent.Type == ojson.String || !canIndexOpenAIRequestPatchObject(parent, nil) {
 				return false
 			}
 		}
 	}
 	// Reject unsuitable shapes before paying for full validation. Only a valid
 	// document reaches Doc; both borrowed readers tolerate malformed input.
-	return openAIRequestPatchObjectIsSmall(root) && ojson.ValidBytes(body)
+	return canIndexOpenAIRequestPatchObject(root, rootEdits) && ojson.ValidBytes(body)
 }
 
 // isOpenAIBatchPatchPath narrows isSimpleOpenAIRequestPatchPath to what ojson
@@ -1353,26 +1358,40 @@ func isOpenAIBatchPatchPath(path string) bool {
 	return !start
 }
 
-func openAIRequestPatchObjectIsSmall(value ojson.Result) bool {
+// rootEdits tracks whether each root key being edited has already been seen.
+// Doc would only edit its first occurrence, so repeated keys need the sequential path.
+func canIndexOpenAIRequestPatchObject(value ojson.Result, rootEdits map[string]bool) bool {
 	const maxMembers = 64
 	if !value.IsObject() {
 		return true
 	}
 	members := 0
-	value.ForEach(func(_, _ ojson.Result) bool {
+	ok := true
+	value.ForEach(func(key, _ ojson.Result) bool {
 		members++
-		return members <= maxMembers
+		seen, edited := rootEdits[key.Str]
+		ok = members <= maxMembers && !seen
+		if edited {
+			rootEdits[key.Str] = true
+		}
+		return ok
 	})
-	return members <= maxMembers
+	return ok
 }
 
 func (v openAIRequestView) applyPatchesSequential() ([]byte, error) {
 	body := v.body
 	for _, patch := range v.patches {
 		var err error
-		if patch.delete {
+		rootField := !strings.Contains(patch.path, ".") && isOpenAIBatchPatchPath(patch.path)
+		switch {
+		case rootField && patch.delete:
+			body, err = deleteRootJSONField(body, patch.path)
+		case rootField:
+			body, err = setRootJSONValue(body, patch.path, patch.value)
+		case patch.delete:
 			body, err = sjson.DeleteBytes(body, patch.path)
-		} else {
+		default:
 			body, err = sjson.SetBytes(body, patch.path, patch.value)
 		}
 		if err != nil {
@@ -1507,6 +1526,14 @@ func normalizeOpenAIOAuthResponsesCompatibilityBody(body []byte) ([]byte, bool, 
 		return normalized, changed, nil
 	}
 	const field = "internal_chat_message_metadata_passthrough"
+	// 逐项 item.Get(field) 会对每个 input 项做一次 JSON 对象探测；长会话请求体
+	// 有数千项，构成本函数的主要开销（cpu profile: gjson.parseSquash 占 41%）。
+	// 字段名在整个请求体中不出现时该字段必然不存在，用一次 memmem 前置跳过。
+	// 键名允许写成 \uXXXX 转义，此时字面量匹配会漏掉真实存在的字段，把内部字段
+	// 原样发给上游。出现 \u 转义时放弃前置，按原路径逐项清理。
+	if !hasJSONUnicodeEscape(normalized) && !bytes.Contains(normalized, []byte(field)) {
+		return normalized, changed, nil
+	}
 	hasMetadata := false
 	input.ForEach(func(_, item gjson.Result) bool {
 		hasMetadata = item.IsObject() && item.Get(field).Exists()

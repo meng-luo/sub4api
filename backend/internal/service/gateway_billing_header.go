@@ -1,13 +1,13 @@
 package service
 
 import (
+	"bytes"
 	"fmt"
 	"regexp"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 // ccVersionInBillingRe matches the semver part of cc_version (X.Y.Z).
@@ -20,7 +20,7 @@ const claudeBillingSourceTextKey = "claude_billing_source_text"
 // Capture before proxy system migration. Never infer provenance from text prefixes.
 func captureClaudeBillingSource(c *gin.Context, body []byte) {
 	if c != nil {
-		c.Set(claudeBillingSourceTextKey, extractFirstUserText(body))
+		c.Set(claudeBillingSourceTextKey, strings.Clone(extractFirstUserText(body)))
 	}
 }
 
@@ -54,7 +54,7 @@ func syncBillingHeaderVersion(body []byte, userAgent string, c *gin.Context) []b
 		return body
 	}
 
-	systemResult := gjson.GetBytes(body, "system")
+	systemResult := lastRootJSONField(body, "system")
 	if !systemResult.Exists() || !systemResult.IsArray() {
 		return body
 	}
@@ -72,9 +72,10 @@ func syncBillingHeaderVersion(body []byte, userAgent string, c *gin.Context) []b
 	// The fingerprint depends only on the original messages and version, so it
 	// is the same for every billing block. Compute it lazily, at most once.
 	fingerprintedReplacement := ""
-	idx := 0
+	var rebuilt bytes.Buffer
+	copyFrom := 0
 	systemResult.ForEach(func(_, item gjson.Result) bool {
-		text := item.Get("text")
+		text, repeated := lastJSONObjectField(item, "text")
 		if text.Exists() && text.Type == gjson.String &&
 			strings.HasPrefix(text.String(), "x-anthropic-billing-header") {
 			if fingerprintedReplacement == "" {
@@ -82,17 +83,31 @@ func syncBillingHeaderVersion(body []byte, userAgent string, c *gin.Context) []b
 			}
 			newText := ccVersionWithFingerprintInBillingRe.ReplaceAllString(text.String(), fingerprintedReplacement)
 			newText = ccVersionInBillingRe.ReplaceAllString(newText, replacement)
-			if newText != text.String() {
-				if updated, err := sjson.SetBytes(body, fmt.Sprintf("system.%d.text", idx), newText); err == nil {
-					body = updated
+			if repeated || newText != text.String() {
+				updated, err := setRootJSONValue(sliceRawFromBody(body, item), "text", newText)
+				if err != nil {
+					return true
 				}
+				if copyFrom == 0 {
+					rebuilt.Grow(len(systemResult.Raw))
+				}
+				itemStart := item.Index - systemResult.Index
+				rebuilt.WriteString(systemResult.Raw[copyFrom:itemStart])
+				rebuilt.Write(updated)
+				copyFrom = itemStart + len(item.Raw)
 			}
 		}
-		idx++
 		return true
 	})
-
-	return body
+	if copyFrom == 0 {
+		return body
+	}
+	rebuilt.WriteString(systemResult.Raw[copyFrom:])
+	updated, err := setRootJSONField(body, "system", rebuilt.Bytes())
+	if err != nil {
+		return body
+	}
+	return updated
 }
 
 func billingSourceText(body []byte, c *gin.Context) string {
@@ -113,10 +128,11 @@ func ensureClaudeCodeBillingBlock(body []byte, userAgent string, c *gin.Context)
 	if version == "" {
 		return body
 	}
-	system := gjson.GetBytes(body, "system")
+	system := lastRootJSONField(body, "system")
 	if system.IsArray() {
 		for _, item := range system.Array() {
-			if strings.HasPrefix(item.Get("text").String(), "x-anthropic-billing-header") {
+			text, _ := lastJSONObjectField(item, "text")
+			if strings.HasPrefix(text.String(), "x-anthropic-billing-header") {
 				return syncBillingHeaderVersion(body, userAgent, c)
 			}
 		}
@@ -136,8 +152,8 @@ func ensureClaudeCodeBillingBlock(body []byte, userAgent string, c *gin.Context)
 			items = append(items, original)
 		}
 	}
-	updated, ok := setJSONRawBytes(body, "system", buildJSONArrayRaw(items))
-	if !ok {
+	updated, err := setRootJSONField(body, "system", buildJSONArrayRaw(items))
+	if err != nil {
 		return body
 	}
 	return updated

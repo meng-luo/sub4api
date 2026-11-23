@@ -9,7 +9,6 @@ import (
 	"github.com/MACOS-DO/sub4api/internal/pkg/apicompat"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 const openAIResponsesNamespaceNamesContextKey = "openai_responses_namespace_names"
@@ -194,12 +193,12 @@ func flattenOpenAIResponsesNamespaces(c *gin.Context, body []byte) ([]byte, erro
 // namespace，让 Codex 调用能按上游要求原样回传；判定见
 // shouldKeepOpenAIResponsesToolCallNamespaces。
 func stripOpenAIResponsesInputNamespaces(body []byte, keepToolCallNamespaces bool) ([]byte, error) {
-	if !bytes.Contains(body, []byte(`"namespace"`)) {
+	if !bytes.Contains(body, []byte(`"namespace"`)) && !hasJSONUnicodeEscape(body) {
 		return body, nil
 	}
 	// Zero-copy view: input.Raw aliases body and is only read below; the
 	// rebuilt array is written into a fresh buffer.
-	input := parseRawJSONView(body).Get("input")
+	input := lastRootJSONField(body, "input")
 	if !input.IsArray() {
 		return body, nil
 	}
@@ -210,11 +209,16 @@ func stripOpenAIResponsesInputNamespaces(body []byte, keepToolCallNamespaces boo
 	copyFrom := 0
 	var stripErr error
 	input.ForEach(func(_, item gjson.Result) bool {
-		if !item.IsObject() || !item.Get("namespace").Exists() ||
-			(keepToolCallNamespaces && isOpenAIResponsesToolCallItemType(item.Get("type").String())) {
+		if !item.IsObject() || !item.Get("namespace").Exists() {
 			return true
 		}
-		itemBody, err := sjson.DeleteBytes([]byte(item.Raw), "namespace")
+		if keepToolCallNamespaces {
+			itemType, _ := lastJSONObjectField(item, "type")
+			if isOpenAIResponsesToolCallItemType(itemType.String()) {
+				return true
+			}
+		}
+		itemBody, err := deleteRootJSONField([]byte(item.Raw), "namespace")
 		if err != nil {
 			stripErr = err
 			return false
@@ -238,7 +242,7 @@ func stripOpenAIResponsesInputNamespaces(body []byte, keepToolCallNamespaces boo
 		return body, nil
 	}
 	_, _ = rebuilt.WriteString(input.Raw[copyFrom:])
-	stripped, err := sjson.SetRawBytes(body, "input", rebuilt.Bytes())
+	stripped, err := setRootJSONField(body, "input", rebuilt.Bytes())
 	if err != nil {
 		return body, fmt.Errorf("replace OpenAI input after namespace deletion: %w", err)
 	}

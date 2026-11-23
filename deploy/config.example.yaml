@@ -232,11 +232,15 @@ security:
 gateway:
   # Codex ChatGPT 面上游请求体的 zstd 压缩策略：off | on | by_size。
   # 官方 Codex CLI 的业务请求一律明文（实测 45 KB ~ 31.7 MB 均不带 Content-Encoding），
-  # 因此默认 by_size：只有超过阈值的超大请求才压缩，普通请求逐字节复刻官方形态。
+  # 因此默认 by_size：只有超过阈值的请求才压缩，小请求逐字节复刻官方形态。
+  # 阈值默认 262144（256 KiB）：zstd 单线程编码 256 KiB 约 3 ms、省下约 191 KiB 上行，
+  # 2 MiB 约 7 ms 省下 1.5 MiB —— 跨境上行下回报比远高于编码成本。
+  # 该项留空即继承 backend/internal/config 的 DefaultCodexRequestCompressionMinBytes，
+  # 需要覆盖时再放开下一行。
   # Codex request body compression for the ChatGPT surface: off | on | by_size.
   codex:
     request_compression: by_size
-    request_compression_min_bytes: 8388608
+    # request_compression_min_bytes: 262144
   # ChatGPT 面出站身份细节 / outbound identity details for the ChatGPT surface.
   codex_identity:
     # 官方业务请求不含 version 头，默认不发；上游策略回退时临时打开。

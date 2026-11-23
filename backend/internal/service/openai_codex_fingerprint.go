@@ -633,7 +633,7 @@ func applyCodexFingerprintClientMetadataRaw(body []byte, ids *codexFingerprintID
 	}
 	// 非 JSON 对象的 body（数组/标量/畸形）没有 client_metadata 语义，
 	// sjson 在这类根上写字段会改写整体结构，直接放行保持原样。
-	root := gjson.ParseBytes(body)
+	root := parseRawJSONView(body)
 	if !root.IsObject() {
 		captureCodexFingerprintOriginalBodySessionIDRaw(ids, gjson.Result{})
 		return body, false, nil

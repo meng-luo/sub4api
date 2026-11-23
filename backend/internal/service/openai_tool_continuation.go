@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"strings"
 
 	"github.com/tidwall/gjson"
@@ -232,6 +233,16 @@ type ToolCallOutputContextCoverage struct {
 func AnalyzeToolCallOutputContextCoverageBytes(body []byte) ToolCallOutputContextCoverage {
 	coverage := ToolCallOutputContextCoverage{}
 	if len(body) == 0 {
+		return coverage
+	}
+	// coverage 的两个输出字段都只在出现 tool-call-output 类 item 时才可能为真；
+	// 这些 item 的 type 字面量必含 "_output"，context 类必含 "_call"，两者都没有
+	// 时整段分析必然返回零值。用一次 memmem 前置省掉整段请求体的 gjson 扫描。
+	// 该推理只在原始字节与解码后文本一致时成立：type 值允许写成 \uXXXX 转义，
+	// 此时字面量匹配会漏掉真实存在的工具输出，进而让转发/重试跳过必要的工具
+	// 调用上下文。出现 \u 转义时放弃前置，回到完整解析。
+	if !hasJSONUnicodeEscape(body) &&
+		!bytes.Contains(body, []byte("_output")) && !bytes.Contains(body, []byte("item_reference")) {
 		return coverage
 	}
 	input := parseRawJSONView(body).Get("input")

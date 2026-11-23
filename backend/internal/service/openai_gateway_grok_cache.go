@@ -10,7 +10,6 @@ import (
 	"github.com/MACOS-DO/sub4api/internal/pkg/xai"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 const (
@@ -119,7 +118,7 @@ func explicitGrokCacheSeed(c *gin.Context, body []byte, explicitKey string) stri
 	// entire conversation (~300K+ tokens each time). The body field is the
 	// official xAI cache-routing signal — respect it when present.
 	if seed == "" && len(body) > 0 {
-		seed = strings.TrimSpace(gjson.GetBytes(body, "prompt_cache_key").String())
+		seed = strings.TrimSpace(lastRootJSONField(body, "prompt_cache_key").String())
 	}
 	if seed == "" && c != nil {
 		seed = strings.TrimSpace(c.GetHeader(grokConversationIDHeader))
@@ -165,12 +164,9 @@ func isGrokRequestContext(c *gin.Context) bool {
 func applyGrokResponsesCacheIdentity(body, intentSourceBody []byte, identity string, injectFreeTierTools bool) ([]byte, error) {
 	identity = strings.TrimSpace(identity)
 	if identity == "" {
-		if gjson.GetBytes(body, "prompt_cache_key").Exists() {
-			return sjson.DeleteBytes(body, "prompt_cache_key")
-		}
-		return body, nil
+		return deleteRootJSONField(body, "prompt_cache_key")
 	}
-	out, err := sjson.SetBytes(body, "prompt_cache_key", identity)
+	out, err := setRootJSONValue(body, "prompt_cache_key", identity)
 	if err != nil {
 		return nil, err
 	}
@@ -183,18 +179,18 @@ func applyGrokResponsesCacheIdentity(body, intentSourceBody []byte, identity str
 	if hasGrokResponsesToolIntent(intentSourceBody) {
 		return out, nil
 	}
-	out, err = sjson.SetRawBytes(out, "tools", []byte(grokFreeCacheNativeToolsJSON))
+	out, err = setRootJSONField(out, "tools", []byte(grokFreeCacheNativeToolsJSON))
 	if err != nil {
 		return nil, err
 	}
-	return sjson.SetBytes(out, "tool_choice", grokFreeCacheDisabledToolChoice)
+	return setRootJSONValue(out, "tool_choice", grokFreeCacheDisabledToolChoice)
 }
 
 func hasGrokResponsesToolIntent(body []byte) bool {
 	if gjson.GetBytes(body, "tools").Exists() || gjson.GetBytes(body, "tool_choice").Exists() {
 		return true
 	}
-	input := gjson.GetBytes(body, "input")
+	input := lastRootJSONField(body, "input")
 	if !input.IsArray() {
 		return false
 	}
@@ -300,8 +296,8 @@ func applyGrokFreeToolCacheRoute(body, intentSourceBody []byte, account *Account
 	if strings.TrimSpace(cacheIdentity) == "" || !isKnownGrokFreeAccount(account) {
 		return body, nil
 	}
-	intentTools := gjson.GetBytes(intentSourceBody, "tools")
-	intentToolChoice := gjson.GetBytes(intentSourceBody, "tool_choice")
+	intentTools := lastRootJSONField(intentSourceBody, "tools")
+	intentToolChoice := lastRootJSONField(intentSourceBody, "tool_choice")
 	if !isGrokFreeCacheFunctionToolIntent(intentTools, intentToolChoice) {
 		return body, nil
 	}
@@ -438,7 +434,7 @@ func appendGrokFreeCacheNativeTools(body []byte, allowPureClientTools bool) ([]b
 }
 
 func appendGrokFreeCacheNativeToolsWithPolicy(body []byte, allowPureClientTools, allowFunctionSearch bool) ([]byte, error) {
-	tools := gjson.GetBytes(body, "tools")
+	tools := lastRootJSONField(body, "tools")
 	if !tools.Exists() || !tools.IsArray() {
 		return body, nil
 	}
@@ -530,7 +526,7 @@ func appendGrokFreeCacheNativeToolsWithPolicy(body []byte, allowPureClientTools,
 	if err != nil {
 		return nil, err
 	}
-	return sjson.SetRawBytes(body, "tools", encoded)
+	return setRootJSONField(body, "tools", encoded)
 }
 
 // applyGrokCacheHeaders applies the documented Chat Completions conversation
@@ -551,8 +547,5 @@ func applyGrokCacheHeaders(headers http.Header, identity string) {
 // stripGrokChatPromptCacheKey removes the Responses-only body field after it
 // has been used as an identity seed. Chat Completions routes cache by header.
 func stripGrokChatPromptCacheKey(body []byte) ([]byte, error) {
-	if !gjson.GetBytes(body, "prompt_cache_key").Exists() {
-		return body, nil
-	}
-	return sjson.DeleteBytes(body, "prompt_cache_key")
+	return deleteRootJSONField(body, "prompt_cache_key")
 }

@@ -683,7 +683,7 @@ func (s *OpenAIGatewayService) forwardWithoutHostedWebSearch(ctx context.Context
 	}
 
 	if !isCodexCLI {
-		maxOutputTokens := gjson.GetBytes(body, "max_output_tokens")
+		maxOutputTokens := lastRootJSONField(body, "max_output_tokens")
 		if maxOutputTokens.Exists() {
 			switch account.Platform {
 			case PlatformOpenAI, PlatformDeepseek:
@@ -710,8 +710,8 @@ func (s *OpenAIGatewayService) forwardWithoutHostedWebSearch(ctx context.Context
 		// 仅对 OpenAI 平台归一化：Anthropic 合法使用 max_tokens，其 max_output_tokens
 		// 反向转换已在上方 switch 中处理。
 		if account.Platform == PlatformOpenAI {
-			if maxTokens := gjson.GetBytes(body, "max_tokens"); maxTokens.Exists() {
-				if !gjson.GetBytes(body, "max_output_tokens").Exists() {
+			if maxTokens := lastRootJSONField(body, "max_tokens"); maxTokens.Exists() {
+				if !maxOutputTokens.Exists() {
 					markPatchSet("max_output_tokens", maxTokens.Value())
 				}
 				markPatchDelete("max_tokens")

@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/tidwall/sjson"
+	"github.com/tidwall/gjson"
 )
 
 type openAIResponsesLiteValidationError struct {
@@ -369,7 +369,99 @@ func openAIResponsesLiteToolIdentityForError(rawTool any) string {
 	return fmt.Sprintf("tool type %q name %q", strings.TrimSpace(firstNonEmptyString(tool["type"])), strings.TrimSpace(firstNonEmptyString(tool["name"])))
 }
 
+// openAIResponsesLiteToolsPayloadIsCanonical 是 normalizeOpenAIResponsesLiteToolsPayload
+// 的零拷贝前置判定：真机 Codex 的 responses-lite 请求体已经符合目标形态
+// （无顶层 tools、instructions 为空），此时整段 Unmarshal + 逐字段重新编码
+// 不可能产生任何修改。
+//
+// 动机（alloc_space profile，2 MiB 请求）：该函数此前单次调用触发 1 次全量
+// Unmarshal 与 5 个子树的两次 Marshal（input 最大），占透传改写总分配的 40%。
+//
+// **前置结论必须与原解码路径逐点等价**，gjson 视图与 map[string]any 解码在三种
+// 输入上语义不同，因此这三种情况一律放弃快速路径、回到原实现：
+//
+//  1. JSON null：解码为 nil interface（原实现视作「字段不存在」语义，例如
+//     tools:null 会走 hasTools=true 重建、instructions:null 被忽略），而 gjson
+//     给出 Type=Null 的 Result，两者判断不同。
+//  2. 键名/取值含 \uXXXX 转义：原始字节里的字面量匹配不再可信（"\u0074ools"
+//     解码后就是 tools），因此只要出现 \u 转义就不做任何字面量前置。
+//  3. 重复键：编码器对同一键取后者，gjson 取首个，前置会读到错误的值。
+func openAIResponsesLiteToolsPayloadIsCanonical(body []byte) (bool, error) {
+	// 只对「可以证明是 JSON 对象」的请求体走前置；其余保持原解码错误语义。
+	if trimmed := bytes.TrimLeft(body, " \t\r\n"); len(trimmed) == 0 || trimmed[0] != '{' {
+		return false, nil
+	}
+	// 任一 \u 转义都可能藏在键名或类型值里，字面量前置整体失效，回落原路径。
+	if hasJSONUnicodeEscape(body) {
+		return false, nil
+	}
+	// 重复键：map 解码取最后一个，而前置读的是第一个。这里用原始出现次数兜底，
+	// 计数只会偏大（键名出现在字符串值里），偏大即回落原路径，方向安全。
+	if !openAIResponsesLiteKeyCountMatches(body, `"instructions"`, 1) ||
+		!openAIResponsesLiteKeyCountMatches(body, `"parallel_tool_calls"`, 1) ||
+		!openAIResponsesLiteKeyCountMatches(body, `"reasoning"`, 1) ||
+		!openAIResponsesLiteKeyCountMatches(body, `"context"`, 1) {
+		return false, nil
+	}
+	// 顶层 tools 一旦出现（数组 / 对象 / null 都算）就交回原解码路径：
+	//   - 数组：需要折叠进 additional_tools；
+	//   - null：原实现解成 nil，被当作 hasTools=true 走重建；
+	//   - 重复键：gjson 取首个、map 解码取末个，首个为对象而末个为合法数组时，
+	//     在前置里做类型校验会误报 400。
+	// 因此这里只做「存在性」判断，任何类型校验都留给原实现，避免与解码语义分叉。
+	if gjson.GetBytes(body, "tools").Raw != "" {
+		return false, nil
+	}
+	instructions := gjson.GetBytes(body, "instructions")
+	if instructions.Raw != "" {
+		// instructions:null 在原实现里因为 raw == nil 被跳过（不报错也不改写）。
+		if instructions.Type == gjson.Null {
+			return false, nil
+		}
+		if instructions.Type != gjson.String {
+			return false, newOpenAIResponsesLiteValidationError("instructions", "responses Lite requires instructions to be a string")
+		}
+		if instructions.String() != "" {
+			return false, nil
+		}
+	}
+	// stripOpenAIResponsesLiteImageDetails 会删除 input_image 上的 detail 字段。
+	// 整个请求体不含 "detail" 时该步骤必然无修改，用一次 memmem 前置跳过。
+	if bytes.Contains(body, []byte(`"detail"`)) {
+		return false, nil
+	}
+	parallel := gjson.GetBytes(body, "parallel_tool_calls")
+	if parallel.Raw != "" && parallel.Type != gjson.True && parallel.Type != gjson.False {
+		return false, newOpenAIResponsesLiteValidationError("parallel_tool_calls", "responses Lite requires parallel_tool_calls to be a boolean")
+	}
+	// ensureOpenAIResponsesLiteParallelToolCalls 只在已显式为 false 时不动。
+	if parallel.Type != gjson.False {
+		return false, nil
+	}
+	reasoning := gjson.GetBytes(body, "reasoning")
+	if reasoning.Raw != "" && reasoning.Type != gjson.Null && !reasoning.IsObject() {
+		return false, newOpenAIResponsesLiteValidationError("reasoning", "responses Lite requires reasoning to be an object")
+	}
+	// ensureOpenAIResponsesLiteReasoningContext 在缺失或 context 非 all_turns 时改写。
+	if reasoning.Type != gjson.JSON || reasoning.Get("context").String() != "all_turns" {
+		return false, nil
+	}
+	return true, nil
+}
+
+// openAIResponsesLiteKeyCountMatches 判断原始 body 里某个带引号键名的出现次数
+// 是否恰好等于最大允许次数。计数基于原始字节，因此字符串值里出现的同名文本也
+// 会被计入——计数只会偏大，偏大即让调用方回落原路径。
+func openAIResponsesLiteKeyCountMatches(body []byte, quotedKey string, maxOccurrences int) bool {
+	return bytes.Count(body, []byte(quotedKey)) <= maxOccurrences
+}
+
 func normalizeOpenAIResponsesLiteToolsPayload(body []byte) ([]byte, bool, error) {
+	if canonical, err := openAIResponsesLiteToolsPayloadIsCanonical(body); err != nil {
+		return body, false, err
+	} else if canonical {
+		return body, false, nil
+	}
 	var requestBody map[string]any
 	if err := decodeOpenAIJSONUseNumber(body, &requestBody); err != nil {
 		return body, false, fmt.Errorf("decode responses Lite request body: %w", err)
@@ -396,13 +488,13 @@ func normalizeOpenAIResponsesLiteToolsPayload(body []byte) ([]byte, bool, error)
 		value, exists := requestBody[field]
 		if !exists {
 			if _, existed := before[field]; existed {
-				updated, err = sjson.DeleteBytes(updated, field)
+				updated, err = deleteRootJSONField(updated, field)
 			}
 		} else {
 			var encoded []byte
 			encoded, err = marshalOpenAIUpstreamJSON(value)
 			if err == nil && !bytes.Equal(before[field], encoded) {
-				updated, err = sjson.SetRawBytes(updated, field, encoded)
+				updated, err = setRootJSONField(updated, field, encoded)
 			}
 		}
 		if err != nil {
@@ -421,7 +513,7 @@ func normalizeOpenAIResponsesLiteParallelToolCallsPayload(body []byte) ([]byte, 
 	if err != nil || !changed {
 		return body, false, err
 	}
-	updated, err := sjson.SetBytes(body, "parallel_tool_calls", false)
+	updated, err := setRootJSONField(body, "parallel_tool_calls", []byte("false"))
 	if err != nil {
 		return body, false, fmt.Errorf("normalize responses Lite parallel_tool_calls: %w", err)
 	}

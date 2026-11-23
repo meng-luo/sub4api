@@ -348,9 +348,66 @@ func doUpstreamRequest(client *http.Client, req *http.Request, compression codex
 	return resp, nil
 }
 
+// codexResponsesZstdEncoder 供「长度未知、必须先读全包才能判定阈值」的兜底路径
+// 使用。Encoder.EncodeAll 可以并发调用，因此单例在这里是安全的。
+// SpeedFastest 与 SpeedDefault 的压缩比几乎相同（实测 3.71x vs 3.83x），但大 body
+// 快 10%~15%（30 MiB：91 ms vs 101 ms），在上行带宽是瓶颈的前提下更划算。
 var codexResponsesZstdEncoder = sync.OnceValues(func() (*zstd.Encoder, error) {
-	return zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1), zstd.WithEncoderLevel(zstd.SpeedDefault))
+	return zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1), zstd.WithEncoderLevel(zstd.SpeedFastest))
 })
+
+// codexResponsesZstdStreamPool 提供流式编码器实例。
+//
+// EncodeAll 是并发安全的，但 Reset/Write/Close 这条流式路径不是——共用单例会让
+// 并发请求互相覆盖编码状态。池化保证任一编码器同一时刻只被一个请求持有，池规模
+// 随并发自然增长并在空闲时回收。
+var codexResponsesZstdStreamPool = sync.Pool{
+	New: func() any {
+		encoder, err := zstd.NewWriter(nil,
+			zstd.WithEncoderConcurrency(1),
+			zstd.WithEncoderLevel(zstd.SpeedFastest))
+		if err != nil {
+			return nil
+		}
+		return encoder
+	},
+}
+
+// encodeCodexRequestBodyStreaming 把 replay 流式压缩进内存，避免为整包 body 再
+// 分配一份明文副本（30 MB 请求 = 30 MB 额外分配 + 一次 memcpy）。
+// sizeHint 仅用于预分配输出缓冲，不参与正确性判断。
+func encodeCodexRequestBodyStreaming(replay io.Reader, sizeHint int64) ([]byte, error) {
+	pooled := codexResponsesZstdStreamPool.Get()
+	encoder, _ := pooled.(*zstd.Encoder)
+	if encoder == nil {
+		return nil, errors.New("zstd stream encoder unavailable")
+	}
+	var buf bytes.Buffer
+	if sizeHint > 0 {
+		// JSON 实测压缩比 3.7x~8x；按原文 1/3 预留并封顶 1 MiB，避免大请求一次性
+		// 预分配过多。
+		estimate := sizeHint / 3
+		if estimate > 1<<20 {
+			estimate = 1 << 20
+		}
+		buf.Grow(int(estimate))
+	}
+	encoder.Reset(&buf)
+	if _, copyErr := io.Copy(encoder, replay); copyErr != nil {
+		// 编码器可能停在半途，直接丢弃而不是放回池中。
+		_ = encoder.Close()
+		return nil, copyErr
+	}
+	if closeErr := encoder.Close(); closeErr != nil {
+		return nil, closeErr
+	}
+	// Close 之后编码器仍持有上一次 Reset 写入的目标 writer；直接放回池中会让
+	// 池里每个编码器长期钉住上一笔请求的压缩缓冲。Reset 到 io.Discard 解除
+	// 该引用后再归还。
+	encoder.Reset(io.Discard)
+	codexResponsesZstdStreamPool.Put(encoder)
+	return buf.Bytes(), nil
+}
 
 // 官方 Codex 业务请求体一律明文（45 KB ~ 31.7 MB 实测均不带 Content-Encoding），
 // 因此压缩只是可选优化：off 永不压缩、on 命中即压缩、by_size（默认）仅在请求体超过
@@ -393,22 +450,28 @@ func compressCodexResponsesRequest(req *http.Request, policy codexRequestCompres
 		slog.Debug("codex_request_compression_replay_failed", "error", err)
 		return false
 	}
-	payload, err := io.ReadAll(replay)
-	_ = replay.Close()
-	if err != nil {
-		slog.Debug("codex_request_compression_read_failed", "error", err)
-		return false
-	}
-	if policy.mode == config.CodexRequestCompressionBySize {
-		bodyLen := req.ContentLength
-		if bodyLen <= 0 {
-			bodyLen = int64(len(payload))
-		}
-		if bodyLen <= policy.minBytes {
+	defer func() { _ = replay.Close() }()
+
+	var encoded []byte
+	if req.ContentLength > 0 {
+		// 长度已知且已由上面的 switch 判定需要压缩：流式编码，不复制明文整包。
+		encoded, err = encodeCodexRequestBodyStreaming(replay, req.ContentLength)
+		if err != nil {
+			slog.Debug("codex_request_compression_encode_failed", "error", err)
 			return false
 		}
+	} else {
+		// 长度未知（chunked）：必须先读完才知道是否超过 by_size 阈值。
+		payload, readErr := io.ReadAll(replay)
+		if readErr != nil {
+			slog.Debug("codex_request_compression_read_failed", "error", readErr)
+			return false
+		}
+		if policy.mode == config.CodexRequestCompressionBySize && int64(len(payload)) <= policy.minBytes {
+			return false
+		}
+		encoded = encoder.EncodeAll(payload, nil)
 	}
-	encoded := encoder.EncodeAll(payload, nil)
 	_ = req.Body.Close()
 	req.Body = io.NopCloser(bytes.NewReader(encoded))
 	req.GetBody = func() (io.ReadCloser, error) {

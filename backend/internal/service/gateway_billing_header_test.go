@@ -77,6 +77,12 @@ func TestSyncBillingHeaderVersion(t *testing.T) {
 	}
 }
 
+func TestSyncBillingHeaderVersionDuplicateSystemText(t *testing.T) {
+	body := []byte(`{"system":[],"messages":[], "system":[ {"text":"first","type":"text","\u0074ext":"x-anthropic-billing-header: cc_version=2.1.81;"} , {"text":"keep"} ]}`)
+	out := syncBillingHeaderVersion(body, "claude-cli/2.1.22", nil)
+	require.Equal(t, `{"system":[ {"text":"x-anthropic-billing-header: cc_version=2.1.22;","type":"text"} , {"text":"keep"} ],"messages":[]}`, string(out))
+}
+
 func TestSyncBillingHeaderVersion_RecomputesSuffixAndIsIdempotent(t *testing.T) {
 	body := []byte(`{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.81.df2; cc_entrypoint=cli;"}],"messages":[{"role":"user","content":"hello world"}]}`)
 	version := "2.1.22"

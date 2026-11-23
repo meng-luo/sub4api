@@ -4,9 +4,6 @@ import (
 	"math"
 	"strconv"
 	"strings"
-
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 // Official Imagine image geometry: https://docs.x.ai/developers/model-capabilities/images/generation
@@ -30,21 +27,22 @@ var grokImagineAspectRatioValues = []struct {
 }
 
 func applyGrokImagineImageGeometry(body []byte) ([]byte, error) {
-	size := strings.TrimSpace(gjson.GetBytes(body, "size").String())
-	resolution := grokImagineImageResolution(gjson.GetBytes(body, "resolution").String())
-	aspect := strings.TrimSpace(gjson.GetBytes(body, "aspect_ratio").String())
+	size := strings.TrimSpace(lastRootJSONField(body, "size").String())
+	rawResolution := lastRootJSONField(body, "resolution").String()
+	resolution := grokImagineImageResolution(rawResolution)
+	aspect := strings.TrimSpace(lastRootJSONField(body, "aspect_ratio").String())
 	out := append([]byte(nil), body...)
 
 	if resolution == "" {
 		if derived := grokImagineImageResolutionFromSize(size); derived != "" {
-			next, err := sjson.SetBytes(out, "resolution", derived)
+			next, err := setRootJSONValue(out, "resolution", derived)
 			if err != nil {
 				return nil, err
 			}
 			out = next
 		}
-	} else if gjson.GetBytes(body, "resolution").String() != resolution {
-		next, err := sjson.SetBytes(out, "resolution", resolution)
+	} else if rawResolution != resolution {
+		next, err := setRootJSONValue(out, "resolution", resolution)
 		if err != nil {
 			return nil, err
 		}
@@ -53,7 +51,7 @@ func applyGrokImagineImageGeometry(body []byte) ([]byte, error) {
 
 	if aspect == "" {
 		if derived := grokImagineAspectRatioFromSize(size); derived != "" {
-			next, err := sjson.SetBytes(out, "aspect_ratio", derived)
+			next, err := setRootJSONValue(out, "aspect_ratio", derived)
 			if err != nil {
 				return nil, err
 			}
@@ -61,10 +59,7 @@ func applyGrokImagineImageGeometry(body []byte) ([]byte, error) {
 		}
 	}
 
-	if !gjson.GetBytes(out, "size").Exists() {
-		return out, nil
-	}
-	return sjson.DeleteBytes(out, "size")
+	return deleteRootJSONField(out, "size")
 }
 
 func assignGrokMediaResolution(value string, info *GrokMediaRequestInfo) {

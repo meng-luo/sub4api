@@ -17,6 +17,13 @@ func TestApplyGrokImagineImageGeometryMapsOpenAISize(t *testing.T) {
 	require.Equal(t, "3:4", gjson.GetBytes(out, "aspect_ratio").String())
 }
 
+func TestApplyGrokImagineImageGeometryDuplicateFields(t *testing.T) {
+	body := []byte(`{"size":"1024x1024","resolution":"1k","aspect_ratio":"1:1","size":"1152x1536","resolution":"2K","aspect_ratio":""}`)
+	out, err := applyGrokImagineImageGeometry(body)
+	require.NoError(t, err)
+	require.Equal(t, `{"resolution":"2k","aspect_ratio":"3:4"}`, string(out))
+}
+
 func TestApplyGrokImagineImageGeometryKeepsClientGeometry(t *testing.T) {
 	t.Parallel()
 

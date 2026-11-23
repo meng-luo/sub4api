@@ -289,7 +289,7 @@ func normalizeCodexRequestMetadata(body []byte, headers http.Header, account *Ac
 
 // turnTriggerFallback supplies the default for ordinary follow-up WebSocket turns.
 func normalizeCodexRequestMetadataWithTurnTriggerFallback(body []byte, headers http.Header, account *Account, isCompact bool, turnTriggerFallback string) ([]byte, bool, error) {
-	if account == nil || !account.IsOpenAIOAuthLike() || !gjson.ParseBytes(body).IsObject() {
+	if account == nil || !account.IsOpenAIOAuthLike() || !parseRawJSONView(body).IsObject() {
 		return body, false, nil
 	}
 	if isCompact {

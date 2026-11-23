@@ -26,6 +26,19 @@ func TestParseGatewayRequest(t *testing.T) {
 	require.False(t, parsed.ThinkingEnabled)
 }
 
+func TestParseGatewayRequestLongContextRewriteReplacesDuplicateModel(t *testing.T) {
+	body := NewRequestBodyRef([]byte(`{"model":"claude-first[1m]","stream":true,"model":"claude-last"}`))
+	parsed, err := ParseGatewayRequest(body, domain.PlatformAnthropic)
+	require.NoError(t, err)
+	require.Equal(t, "claude-first", parsed.Model)
+	require.Equal(t, `{"model":"claude-first","stream":true}`, string(parsed.Body.Bytes()))
+}
+
+func TestStripEmptyTextBlocksDuplicateMessagesUsesLast(t *testing.T) {
+	body := []byte(`{"messages":[],"other":1,"messages":[{"role":"user","content":[{"type":"text","text":""},{"type":"text","text":"keep"}]}]}`)
+	require.Equal(t, `{"messages":[{"content":[{"text":"keep","type":"text"}],"role":"user"}],"other":1}`, string(StripEmptyTextBlocks(body)))
+}
+
 func TestParseGatewayRequest_ThinkingEnabled(t *testing.T) {
 	body := []byte(`{"model":"claude-sonnet-4-5","thinking":{"type":"enabled"},"messages":[{"content":"hi"}]}`)
 	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), "")

@@ -267,7 +267,7 @@ func parseGatewayRequestCurrentBody(parsed *ParsedRequest, protocol string) erro
 		if protocol == domain.PlatformAnthropic {
 			normalizedModel := normalizeClaudeCodeLongContextModel(parsed.Model)
 			if normalizedModel != parsed.Model {
-				normalizedBody, err := sjson.SetBytes(bodyBytes, "model", normalizedModel)
+				normalizedBody, err := setRootJSONValue(bodyBytes, "model", normalizedModel)
 				if err != nil {
 					return fmt.Errorf("normalize model field: %w", err)
 				}
@@ -604,8 +604,7 @@ func StripEmptyTextBlocks(body []byte) []byte {
 		return body
 	}
 
-	jsonStr := *(*string)(unsafe.Pointer(&body))
-	msgsRes := gjson.Get(jsonStr, "messages")
+	msgsRes := lastRootJSONField(body, "messages")
 	if !msgsRes.Exists() || !msgsRes.IsArray() {
 		return body
 	}
@@ -639,7 +638,7 @@ func StripEmptyTextBlocks(body []byte) []byte {
 	if err != nil {
 		return body
 	}
-	out, err := sjson.SetRawBytes(body, "messages", msgsBytes)
+	out, err := setRootJSONField(body, "messages", msgsBytes)
 	if err != nil {
 		return body
 	}
@@ -808,8 +807,8 @@ func FilterThinkingBlocksForRetry(body []byte, mappedModel string) []byte {
 
 	// 尽量避免把整个 body Unmarshal 成 map（会产生大量 map/接口分配）。
 	// 这里先用 gjson 把 messages 子树摘出来，后续只对 messages 做 Unmarshal/Marshal。
-	jsonStr := *(*string)(unsafe.Pointer(&body))
-	msgsRes := gjson.Get(jsonStr, "messages")
+	root := parseRawJSONView(body)
+	msgsRes, _ := lastJSONObjectField(root, "messages")
 	if !msgsRes.Exists() || !msgsRes.IsArray() {
 		return body
 	}
@@ -821,12 +820,13 @@ func FilterThinkingBlocksForRetry(body []byte, mappedModel string) []byte {
 		bytes.Contains(body, patternTypeRedactedThinking) ||
 		bytes.Contains(body, patternTypeRedactedSpaced) ||
 		bytes.Contains(body, patternThinkingFieldSpaced)
+	topThinking, _ := lastJSONObjectField(root, "thinking")
 	if !hasEmptyContent && !hasEmptyTextBlock && !containsThinkingBlocks {
-		if topThinking := gjson.Get(jsonStr, "thinking"); topThinking.Exists() {
+		if topThinking.Exists() {
 			if claude.IsSonnet55(mappedModel) && topThinking.Get("type").String() == "between_tools" {
 				return body
 			}
-			if out, err := sjson.DeleteBytes(body, "thinking"); err == nil {
+			if out, err := deleteRootJSONField(body, "thinking"); err == nil {
 				out = removeThinkingDependentContextStrategies(out)
 				return out
 			}
@@ -843,8 +843,8 @@ func FilterThinkingBlocksForRetry(body []byte, mappedModel string) []byte {
 	modified := false
 
 	// Disable top-level thinking mode for retry to avoid structural/signature constraints upstream.
-	thinkingMode := gjson.Get(jsonStr, "thinking.type").String()
-	deleteTopLevelThinking := gjson.Get(jsonStr, "thinking").Exists() &&
+	thinkingMode := topThinking.Get("type").String()
+	deleteTopLevelThinking := topThinking.Exists() &&
 		(!claude.IsSonnet55(mappedModel) || thinkingMode != "between_tools")
 
 	for i := 0; i < len(messages); i++ {
@@ -989,7 +989,7 @@ func FilterThinkingBlocksForRetry(body []byte, mappedModel string) []byte {
 
 	out := body
 	if deleteTopLevelThinking {
-		if b, err := sjson.DeleteBytes(out, "thinking"); err == nil {
+		if b, err := deleteRootJSONField(out, "thinking"); err == nil {
 			out = b
 		} else {
 			return body
@@ -1004,7 +1004,7 @@ func FilterThinkingBlocksForRetry(body []byte, mappedModel string) []byte {
 		if err != nil {
 			return body
 		}
-		out, err = sjson.SetRawBytes(out, "messages", msgsBytes)
+		out, err = setRootJSONField(out, "messages", msgsBytes)
 		if err != nil {
 			return body
 		}
@@ -1157,6 +1157,18 @@ func sanitizeAnthropicBodyForBetaTokens(body []byte, anthropicBetaHeader string)
 	return body, changed
 }
 
+// deleteSanitizedBodyField 删除 beta 门控字段。
+//
+// 根字段必须走 deleteRootJSONField：客户端若重复写同一个键，sjson.DeleteBytes 只删
+// 首个 occurrence，门控字段会残留在 body 里被发往上游，而本函数仍返回 deleted=true，
+// 等于把 beta 校验绕过去。嵌套路径（含 "."）保持 sjson 原有语义。
+func deleteSanitizedBodyField(body []byte, field string) ([]byte, error) {
+	if strings.Contains(field, ".") {
+		return sjson.DeleteBytes(body, field)
+	}
+	return deleteRootJSONField(body, field)
+}
+
 // stripAnthropicBodyFieldUnlessBeta 当 field 存在且 anthropic-beta header 不含
 // requiredTokens 中**任何一个** token 时删除该字段（保留条件：含任一 required token）。
 // 单 token 调用即「缺该 beta 则 strip」。返回 (newBody, deleted)。
@@ -1169,7 +1181,7 @@ func stripAnthropicBodyFieldUnlessBeta(body []byte, field, anthropicBetaHeader s
 			return body, false
 		}
 	}
-	b, err := sjson.DeleteBytes(body, field)
+	b, err := deleteSanitizedBodyField(body, field)
 	if err != nil {
 		// 不应发生：gjson 刚验证过字段存在 + body 是合法 JSON。如果 sjson 仍报错，
 		// 调用方会拿到原 body（视为未删除），但此前 computeFinalAnthropicBeta 可能已按
@@ -1215,7 +1227,7 @@ func stripAnthropicMessageOutputConfigUnlessBeta(body []byte, anthropicBetaHeade
 	if !bytes.Contains(body, []byte("output_config")) {
 		return body, false
 	}
-	msgsRes := gjson.GetBytes(body, "messages")
+	msgsRes := lastRootJSONField(body, "messages")
 	if !msgsRes.Exists() || !msgsRes.IsArray() {
 		return body, false
 	}
@@ -1251,7 +1263,7 @@ func stripAnthropicMessageOutputConfigUnlessBeta(body []byte, anthropicBetaHeade
 			!anthropicMessageContentHasBody(gjson.GetBytes(msg, "content")) {
 			continue
 		}
-		stripped, err := sjson.DeleteBytes(msg, "output_config")
+		stripped, err := deleteRootJSONField(msg, "output_config")
 		if err != nil {
 			// 不应发生：字段存在且 msg 是合法 JSON。保守整条保留，不产出半成品。
 			rebuilt = append(rebuilt, msg)
@@ -1267,7 +1279,7 @@ func stripAnthropicMessageOutputConfigUnlessBeta(body []byte, anthropicBetaHeade
 	if err != nil {
 		return body, false
 	}
-	out, err := sjson.SetRawBytes(body, "messages", rebuiltBytes)
+	out, err := setRootJSONField(body, "messages", rebuiltBytes)
 	if err != nil {
 		return body, false
 	}
