@@ -99,7 +99,8 @@ const antigravityUserAgentVersionDBTimeout = 5 * time.Second
 
 // DefaultOpenAICodexUserAgent 是 OpenAI Codex 默认 User-Agent，用于规避浏览器 UA 的质询。
 // 默认采用 codex_cli_rs 身份，避免历史 codex-tui 出口触发 sub2api 的身份风控指纹。
-const DefaultOpenAICodexUserAgent = codexCLIUserAgent
+// 该值带尾部 `(codex_cli_rs; version)` 标识组，与真实 codex-rs UA 同形。
+var DefaultOpenAICodexUserAgent = codexCLIUserAgent
 
 // cachedOpenAICodexUserAgent 缓存 OpenAI Codex UA（进程内缓存，60s TTL）
 type cachedOpenAICodexUserAgent struct {

@@ -20,7 +20,7 @@ func TestNormalizeCodexClientIdentityToCLI(t *testing.T) {
 			originator:     CodexTUIOriginator,
 			userAgent:      "codex-tui/0.163.0 (Windows 11; x86_64) WindowsTerminal (codex-tui; 0.163.0)",
 			wantOriginator: CodexCLIOriginator,
-			wantUserAgent:  "codex_cli_rs/0.163.0 (Windows 11; x86_64) WindowsTerminal",
+			wantUserAgent:  "codex_cli_rs/0.163.0 (Windows 11; x86_64) WindowsTerminal (codex_cli_rs; 0.163.0)",
 			wantChanged:    true,
 		},
 		{

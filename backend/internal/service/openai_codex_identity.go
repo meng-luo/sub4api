@@ -9,6 +9,7 @@ import (
 
 	"github.com/MACOS-DO/sub4api/internal/pkg/openai"
 	"github.com/google/uuid"
+	"github.com/tidwall/gjson"
 )
 
 // codexUpstreamMinVersion 上游 /backend-api/codex 接受的最低 version 头：
@@ -32,13 +33,61 @@ func NormalizeCodexClientVersion(version string) string {
 	return version
 }
 
+// codexExecOriginator 是 codex-rs 非交互执行（`codex exec`）的 originator，
+// 与 turn metadata 的 turn_trigger="exec" 配套。实测该身份正常通过上游。
+const codexExecOriginator = "codex_exec"
+
 // buildCodexCLIUserAgent 按版本号拼出规范 Codex CLI User-Agent。
-// UA 形态只在 codexCLIUserAgentSuffix 一处定义，避免多处拼装漂移。
+// UA 形态只在 codexCLIUserAgentPlatform 一处定义，尾部标识组由
+// buildCodexUserAgentFor 统一生成，避免多处拼装漂移。
 func buildCodexCLIUserAgent(version string) string {
-	if version = NormalizeCodexClientVersion(version); version == "" {
-		return codexCLIUserAgent
+	return buildCodexUserAgentFor(openai.CodexDefaultOriginator, version)
+}
+
+// buildCodexUserAgentFor 按 originator 与版本拼出规范 Codex UA：
+// `{originator}/{version} ({os}; {arch}) {terminal} ({originator}; {version})`。
+//
+// 首段、版本段与尾部 `(originator; version)` 组必须同源自洽：上游按 #3901 校验
+// originator 与 UA 首段是否配套，而真实客户端从不发出首尾不一致的身份。
+// 版本非法或为空时回落到内置常量版本，本函数永不返回空串。
+func buildCodexUserAgentFor(originator, version string) string {
+	if originator = strings.TrimSpace(originator); originator == "" {
+		originator = openai.CodexDefaultOriginator
 	}
-	return openai.CodexDefaultOriginator + "/" + version + codexCLIUserAgentSuffix
+	if version = NormalizeCodexClientVersion(version); version == "" {
+		version = codexCLIVersion
+	}
+	return openai.WithCodexUATrailer(
+		originator+"/"+version+codexCLIUserAgentPlatform,
+		originator,
+		version,
+	)
+}
+
+// codexOriginatorForTurnTrigger 由 x-codex-turn-metadata 的 turn_trigger 反查配套 originator。
+//
+// 真实客户端的 originator 与 turn_trigger 同源：实测逐字节一致的关系是
+// `originator: codex_exec` ↔ `"turn_trigger":"exec"`。网关在强制统一身份时若不跟随，
+// 就会发出「UA/originator 声称是交互式 TUI、请求元数据声称是非交互 exec」的
+// 自相矛盾身份。元数据缺失、非法或非 exec 时返回空串，由调用方沿用规范 CLI 身份。
+func codexOriginatorForTurnTrigger(h http.Header) string {
+	if strings.EqualFold(codexTurnTriggerFromMetadata(h.Get(openAIWSTurnMetadataHeader)), "exec") {
+		return codexExecOriginator
+	}
+	return ""
+}
+
+func codexTurnTriggerFromMetadata(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	metadata, err := decodeCodexTurnMetadata(raw)
+	if err != nil || metadata == nil {
+		return ""
+	}
+	trigger, _ := metadata["turn_trigger"].(string)
+	return strings.TrimSpace(trigger)
 }
 
 // codexIdentityEnforcement 控制 enforceCodexIdentityHeaders 是否强制统一出站身份，
@@ -179,6 +228,13 @@ type codexOutboundIdentity struct {
 // 永久钉死在陈旧版本上，绕过版本自动同步，落回上游身份风控更严格的一侧。
 // 需要固定版本请填「Codex 客户端版本号」并关闭自动同步。
 func resolveCodexOutboundIdentity(candidateUA string) codexOutboundIdentity {
+	return resolveCodexOutboundIdentityFor(candidateUA, "")
+}
+
+// resolveCodexOutboundIdentityFor 与 resolveCodexOutboundIdentity 相同，但允许调用方
+// 指定期望 originator（由请求自身的 turn metadata 反查得出）。指定后 UA 首段与尾部
+// 标识组一起切换到该 originator，保证 originator / UA / 元数据三者一致。
+func resolveCodexOutboundIdentityFor(candidateUA, wantedOriginator string) codexOutboundIdentity {
 	canonical := codexCanonicalUserAgent()
 	if _, _, ok := openai.PairCodexClientIdentity(canonical); !ok {
 		canonical = codexCLIUserAgent
@@ -196,9 +252,15 @@ func resolveCodexOutboundIdentity(candidateUA string) codexOutboundIdentity {
 	// 旧配置或账号级 UA 可能仍保存 codex-tui。该身份是 sub2api 默认出口曾经
 	// 使用的风险指纹，必须与 UA 首段一起归一为 CLI，不能只替换 originator。
 	originator, pairedUA, _ = openai.NormalizeCodexClientIdentityToCLI(originator, pairedUA)
+	if wanted := strings.TrimSpace(wantedOriginator); wanted != "" {
+		if swapped := openai.SwapCodexUserAgentClient(pairedUA, wanted); swapped != "" {
+			originator, pairedUA = wanted, swapped
+		}
+	}
 	// 生效版本只有一个来源：规范身份（面板版本号 → 自动同步值 → 内置常量，见
 	// SettingService.GetOpenAICodexClientVersion）。UA 与 version 头由此同源派生。
 	version := codexClientVersionFromUA(canonical)
+	pairedUA = openai.WithCodexUATrailer(pairedUA, originator, version)
 	if rebuilt := openai.SetCodexUserAgentVersion(pairedUA, version); rebuilt != "" {
 		pairedUA = rebuilt
 	}
@@ -279,6 +341,44 @@ func enforceCodexIdentityHeadersWithUA(h http.Header, overrideUA string) {
 	// 客户端自报的旧值不在这里删——HTTP 业务路径由 projectCodexOutboundHeaders 削平，
 	// 而 models 列表 / search / 探针等路径显式写入的 version 不受影响。
 	setCodexVersionHeader(h, identity.version)
+}
+
+// enforceCodexIdentityHeadersWithOriginator 是 enforceCodexIdentityHeadersWithUA 的
+// 显式 originator 版本，供「已确认客户端声明过 turn_trigger」的调用方在元数据合并完成后
+// 重新收口身份。originator 为空时等价于强制统一为规范 CLI 身份。
+func enforceCodexIdentityHeadersWithOriginator(h http.Header, overrideUA, originator string) {
+	if h == nil || h.Get("originator") == "" {
+		return
+	}
+	if !codexIdentityEnforcement.Load() {
+		pairCodexIdentityHeaders(h)
+		return
+	}
+	identity := resolveCodexOutboundIdentityFor(overrideUA, originator)
+	h.Set("user-agent", identity.userAgent)
+	h.Set("originator", identity.originator)
+	setCodexVersionHeader(h, identity.version)
+}
+
+// codexClientDeclaredTurnTrigger 返回**客户端自己声明**的 turn_trigger，未声明时为空。
+//
+// 必须与「生效元数据」区分：ensureCodexMetadataShapeDefaults 会给缺省请求补
+// turn_trigger=exec（常规回合），那是网关合成的形状值，不代表客户端真实身份。
+// 拿它去切换 originator 会把网关自建的探针/诊断请求也变成 codex_exec，破坏已经
+// 钉定 CLI 身份的诊断基线。这里只在请求头或请求体里真实携带时返回非空。
+func codexClientDeclaredTurnTrigger(h http.Header, body []byte) string {
+	embedded := gjson.GetBytes(body, "client_metadata."+openAIWSTurnMetadataHeader)
+	if embedded.Type == gjson.String {
+		return codexClientDeclaredTurnTriggerFromMetadata(h, embedded.String())
+	}
+	return codexClientDeclaredTurnTriggerFromMetadata(h, "")
+}
+
+func codexClientDeclaredTurnTriggerFromMetadata(h http.Header, embedded string) string {
+	if trigger := codexTurnTriggerFromMetadata(embedded); trigger != "" {
+		return trigger
+	}
+	return codexTurnTriggerFromMetadata(h.Get(openAIWSTurnMetadataHeader))
 }
 
 // pairCodexIdentityHeaders 是关闭强制统一后的兜底收口：保留客户端真实身份，

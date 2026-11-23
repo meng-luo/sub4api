@@ -87,6 +87,7 @@ type openAIWSAcquireRequest struct {
 
 type openAIWSHandshakeCompatibilityKey struct {
 	betaFeatures        string
+	originator          string
 	codexInstallationID string
 	sessionIDHyphen     string
 	sessionIDUnderscore string
@@ -2376,6 +2377,9 @@ func normalizeOpenAIWSBetaFeatures(headers http.Header) string {
 func normalizeOpenAIWSHandshakeCompatibility(account *Account, headers http.Header) openAIWSHandshakeCompatibilityKey {
 	key := openAIWSHandshakeCompatibilityKey{
 		betaFeatures: normalizeOpenAIWSBetaFeatures(headers),
+	}
+	if account.UsesOpenAICodexProtocol() {
+		key.originator = normalizeOpenAIWSStableIdentityHeader(headers, "originator")
 	}
 	mode := activeCodexFingerprintMode(account)
 	if mode == codexFingerprintOff {

@@ -2722,6 +2722,13 @@ func buildCodexModelsManifestURL(endpoint string, appendModelsPath bool, clientV
 			return nil, err
 		}
 	}
+	// 上游 /backend-api/codex/models 只接受合法版本号：缺参数返回 400
+	// "Field required"，空值返回 400 "Invalid client_version format"（2026-11-23 实测）。
+	// 客户端未声明 client_version 时（第三方模型列表调用）必须回落到网关规范版本，
+	// 否则代理会把一个必然失败的请求发给上游。
+	if clientVersion = strings.TrimSpace(clientVersion); clientVersion == "" {
+		clientVersion = CodexCanonicalClientVersion()
+	}
 	query.Set("client_version", clientVersion)
 	requestURL.RawQuery = query.Encode()
 	return requestURL, nil

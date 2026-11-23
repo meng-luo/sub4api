@@ -284,6 +284,11 @@ func splitCodexWindowID(value string) (string, string, bool) {
 // flat client_metadata and transport headers are compatibility projections.
 // isCompact additionally identifies the legacy /responses/compact endpoint.
 func normalizeCodexRequestMetadata(body []byte, headers http.Header, account *Account, isCompact bool) ([]byte, bool, error) {
+	return normalizeCodexRequestMetadataWithTurnTriggerFallback(body, headers, account, isCompact, "")
+}
+
+// turnTriggerFallback supplies the default for ordinary follow-up WebSocket turns.
+func normalizeCodexRequestMetadataWithTurnTriggerFallback(body []byte, headers http.Header, account *Account, isCompact bool, turnTriggerFallback string) ([]byte, bool, error) {
 	if account == nil || !account.IsOpenAIOAuthLike() || !gjson.ParseBytes(body).IsObject() {
 		return body, false, nil
 	}
@@ -309,7 +314,7 @@ func normalizeCodexRequestMetadata(body []byte, headers http.Header, account *Ac
 	// isCompact 与 normalize 取同一判据，保证 request_kind 与 turn_trigger 联动一致。
 	compactionTrigger := HasCompactionTriggerInInput(body)
 	shapeChanged, err := ensureCodexMetadataShapeDefaults(
-		decodeCodexClientMetadataTurnMetadata(cm, headers), cm, body, account, compactionTrigger)
+		decodeCodexClientMetadataTurnMetadata(cm, headers), cm, body, account, compactionTrigger, turnTriggerFallback)
 	if err != nil {
 		return body, false, err
 	}
@@ -616,6 +621,10 @@ func decodeCodexClientMetadataTurnMetadata(cm map[string]any, headers http.Heade
 	if headers != nil {
 		if raw := headers.Get(openAIWSTurnMetadataHeader); strings.TrimSpace(raw) != "" {
 			if decoded, err := decodeCodexTurnMetadata(raw); err == nil {
+				// A blank body trigger must not hide the transport header's declaration.
+				if trigger, ok := metadata["turn_trigger"].(string); ok && strings.TrimSpace(trigger) == "" {
+					delete(metadata, "turn_trigger")
+				}
 				for key, value := range decoded {
 					if _, exists := metadata[key]; !exists {
 						metadata[key] = value
@@ -633,8 +642,8 @@ func decodeCodexClientMetadataTurnMetadata(cm map[string]any, headers http.Heade
 // 后者负责 client_metadata 扁平投影与最终序列化。补齐结果直接回写
 // cm[x-codex-turn-metadata]，后续 normalize 解码后即可看到这些键。
 //
-// 已存在的键一律不覆盖：真实 CLI 上报的取值是权威来源，代理只补它没给的形状字段。
-func ensureCodexMetadataShapeDefaults(metadata map[string]any, cm map[string]any, body []byte, account *Account, isCompact bool) (bool, error) {
+// 保留客户端上报的形状字段，空白的 turn_trigger 视为未声明。
+func ensureCodexMetadataShapeDefaults(metadata map[string]any, cm map[string]any, body []byte, account *Account, isCompact bool, turnTriggerFallback string) (bool, error) {
 	if metadata == nil {
 		return false, nil
 	}
@@ -677,8 +686,13 @@ func ensureCodexMetadataShapeDefaults(metadata map[string]any, cm map[string]any
 	}
 	// turn_trigger 与 request_kind 联动：压缩回合是 compaction，常规回合是 exec
 	// （实测 `codex exec` 的取值，旧文档写的 turn 是错的）。
+	if trigger, ok := metadata["turn_trigger"].(string); ok && strings.TrimSpace(trigger) == "" {
+		delete(metadata, "turn_trigger")
+	}
 	if compactionTurn {
 		setDefault("turn_trigger", "compaction")
+	} else if turnTriggerFallback != "" && turnTriggerFallback != "compaction" {
+		setDefault("turn_trigger", turnTriggerFallback)
 	} else {
 		setDefault("turn_trigger", "exec")
 	}
@@ -776,7 +790,7 @@ func normalizeCodexRequestMetadataMap(payload map[string]any, headers http.Heade
 		return err
 	}
 	shapeChanged, err := ensureCodexMetadataShapeDefaults(
-		decodeCodexClientMetadataTurnMetadata(cm, headers), cm, body, account, isCompact)
+		decodeCodexClientMetadataTurnMetadata(cm, headers), cm, body, account, isCompact, "")
 	if err != nil {
 		return err
 	}

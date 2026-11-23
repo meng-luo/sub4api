@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/MACOS-DO/sub4api/internal/config"
 	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -1249,6 +1251,189 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughBridg
 				require.Equal(t, 1, dialer.DialCount())
 				require.Len(t, upstreamConn.writes, 1)
 			}
+		})
+	}
+}
+
+func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_CodexHandshakeIdentity(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previousPingIdle := openAIWSIngressPreflightPingIdle
+	openAIWSIngressPreflightPingIdle = 0
+	t.Cleanup(func() { openAIWSIngressPreflightPingIdle = previousPingIdle })
+	for _, mode := range []string{OpenAIWSIngressModeCtxPool, OpenAIWSIngressModePassthrough} {
+		for _, tc := range []struct {
+			name, headerMetadata, frameMetadata, wantTrigger, wantOriginator string
+			checkReconnect                                                   bool
+		}{
+			{name: "no declaration", wantTrigger: "exec", wantOriginator: "codex_cli_rs"},
+			{name: "blank frame without header", frameMetadata: `{"turn_trigger":" \t "}`, wantTrigger: "exec", wantOriginator: "codex_cli_rs"},
+			{name: "header fallback", headerMetadata: `{"turn_trigger":"user"}`, frameMetadata: `{}`, wantTrigger: "user", wantOriginator: "codex_cli_rs"},
+			{name: "blank frame falls back to header", headerMetadata: `{"turn_trigger":"user"}`, frameMetadata: `{"turn_trigger":""}`, wantTrigger: "user", wantOriginator: "codex_cli_rs"},
+			{name: "header exec", headerMetadata: `{"turn_trigger":"exec"}`, wantTrigger: "exec", wantOriginator: codexExecOriginator},
+			{name: "frame exec overrides header", headerMetadata: `{"turn_trigger":"user"}`, frameMetadata: `{"turn_trigger":"exec"}`, wantTrigger: "exec", wantOriginator: codexExecOriginator, checkReconnect: true},
+			{name: "frame user overrides header", headerMetadata: `{"turn_trigger":"exec"}`, frameMetadata: `{"turn_trigger":"user"}`, wantTrigger: "user", wantOriginator: "codex_cli_rs", checkReconnect: true},
+		} {
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				cfg := newOpenAIWSExecutionScopeTestConfig()
+				cfg.Gateway.OpenAIWS.ModeRouterV2Enabled = true
+				cfg.Gateway.OpenAIWS.IngressModeDefault = mode
+				firstEvent := []byte(`{"type":"response.completed","response":{"id":"resp_identity","model":"gpt-5.1"}}`)
+				dialer := &openAIWSQueueDialer{conns: []openAIWSClientConn{&openAIWSCaptureConn{events: [][]byte{firstEvent}}}}
+				reconnect := tc.checkReconnect && mode == OpenAIWSIngressModeCtxPool
+				if reconnect {
+					dialer.conns = []openAIWSClientConn{
+						&openAIWSPreflightFailConn{events: [][]byte{firstEvent}},
+						&openAIWSCaptureConn{events: [][]byte{[]byte(`{"type":"response.completed","response":{"id":"resp_reconnect","model":"gpt-5.1"}}`)}},
+					}
+				}
+				pool := newOpenAIWSConnPool(cfg)
+				defer pool.Close()
+				pool.setClientDialerForTest(dialer)
+				svc := &OpenAIGatewayService{
+					cfg: cfg, openaiWSResolver: NewOpenAIWSProtocolResolver(cfg), toolCorrector: NewCodexToolCorrector(),
+					openaiWSPool: pool, openaiWSPassthroughDialer: dialer,
+				}
+				account := &Account{
+					ID: 453, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
+					Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "test-account"},
+					Extra:       map[string]any{"openai_oauth_responses_websockets_v2_mode": mode},
+				}
+				serverErr := make(chan error, 1)
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					conn, err := coderws.Accept(w, r, nil)
+					if err != nil {
+						serverErr <- err
+						return
+					}
+					defer conn.CloseNow()
+					ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+					defer cancel()
+					_, firstMessage, err := conn.Read(ctx)
+					if err != nil {
+						serverErr <- err
+						return
+					}
+					c, _ := gin.CreateTestContext(httptest.NewRecorder())
+					c.Request = r
+					serverErr <- svc.ProxyResponsesWebSocketFromClient(ctx, c, conn, account, "oauth-token", firstMessage, nil)
+				}))
+				defer server.Close()
+				headers := make(http.Header)
+				headers.Set(openAIWSTurnMetadataHeader, tc.headerMetadata)
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				conn, _, err := coderws.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), &coderws.DialOptions{HTTPHeader: headers})
+				require.NoError(t, err)
+				defer conn.CloseNow()
+				payload := `{"type":"response.create","model":"gpt-5.1","input":[]}`
+				if tc.frameMetadata != "" {
+					payload = `{"type":"response.create","model":"gpt-5.1","input":[],"client_metadata":{"x-codex-turn-metadata":` + strconv.Quote(tc.frameMetadata) + `}}`
+				}
+				require.NoError(t, conn.Write(ctx, coderws.MessageText, []byte(payload)))
+				_, completed, err := conn.Read(ctx)
+				require.NoError(t, err)
+				require.Equal(t, "resp_identity", gjson.GetBytes(completed, "response.id").String())
+				wantDials := 1
+				if reconnect {
+					require.NoError(t, conn.Write(ctx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.1","input":[],"prompt_cache_key":"next-cache"}`)))
+					_, completed, err = conn.Read(ctx)
+					require.NoError(t, err)
+					require.Equal(t, "resp_reconnect", gjson.GetBytes(completed, "response.id").String())
+					wantDials = 2
+				}
+				_ = conn.Close(coderws.StatusNormalClosure, "done")
+				select {
+				case err := <-serverErr:
+					if err != nil {
+						require.Contains(t, err.Error(), "StatusNormalClosure")
+					}
+				case <-ctx.Done():
+					t.Fatal("websocket relay did not finish")
+				}
+				dialer.mu.Lock()
+				defer dialer.mu.Unlock()
+				require.Len(t, dialer.requestHeaders, wantDials)
+				for _, handshakeHeaders := range dialer.requestHeaders {
+					require.Equal(t, tc.wantTrigger, gjson.Get(handshakeHeaders.Get(openAIWSTurnMetadataHeader), "turn_trigger").String())
+					require.Equal(t, tc.wantOriginator, handshakeHeaders.Get("originator"))
+					require.True(t, strings.HasPrefix(handshakeHeaders.Get("user-agent"), tc.wantOriginator+"/"))
+				}
+			})
+		}
+	}
+}
+
+func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_CodexFollowUpTurnTrigger(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, mode := range []string{OpenAIWSIngressModeCtxPool, OpenAIWSIngressModePassthrough} {
+		t.Run(mode, func(t *testing.T) {
+			cfg := newOpenAIWSExecutionScopeTestConfig()
+			cfg.Gateway.OpenAIWS.ModeRouterV2Enabled = true
+			cfg.Gateway.OpenAIWS.IngressModeDefault = mode
+			upstream := newStagedPassthroughConn()
+			dialer := &openAIWSQueueDialer{conns: []openAIWSClientConn{upstream}}
+			pool := newOpenAIWSConnPool(cfg)
+			defer pool.Close()
+			pool.setClientDialerForTest(dialer)
+			svc := &OpenAIGatewayService{
+				cfg: cfg, openaiWSResolver: NewOpenAIWSProtocolResolver(cfg), toolCorrector: NewCodexToolCorrector(),
+				openaiWSPool: pool, openaiWSPassthroughDialer: dialer,
+			}
+			account := &Account{
+				ID: 454, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
+				Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "test-account"},
+				Extra:       map[string]any{"openai_oauth_responses_websockets_v2_mode": mode},
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			server, serverErr := startPassthroughHookRecordingServer(t, ctx, svc, account, nil)
+			defer server.Close()
+			headers := make(http.Header)
+			headers.Set(openAIWSTurnMetadataHeader, `{"turn_trigger":"user","turn_id":"handshake-turn"}`)
+			conn, _, err := coderws.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), &coderws.DialOptions{HTTPHeader: headers})
+			require.NoError(t, err)
+			defer conn.CloseNow()
+
+			var firstTurnID string
+			for i, turn := range []struct{ fields, wantTrigger string }{
+				{`"input":[]`, "user"},
+				{`"input":[]`, "user"},
+				{`"input":[],"client_metadata":{"x-codex-turn-metadata":"{\"turn_trigger\":\"\",\"turn_id\":\"follow-up-turn\"}"}`, "user"},
+				{`"input":[],"client_metadata":{"x-codex-turn-metadata":"{\"turn_trigger\":\"exec\"}"}`, "exec"},
+				{`"input":[{"type":"compaction_trigger"}],"client_metadata":{"x-codex-turn-metadata":"{\"turn_trigger\":\" \"}"}`, "compaction"},
+			} {
+				payload := []byte(`{"type":"response.create","model":"gpt-5.1",` + turn.fields + `}`)
+				require.NoError(t, conn.Write(ctx, coderws.MessageText, payload))
+				forwarded := requirePassthroughUpstreamWrite(t, upstream, time.Second)
+				metadata := gjson.GetBytes(forwarded, "client_metadata."+openAIWSTurnMetadataHeader).String()
+				assert.Equal(t, turn.wantTrigger, gjson.Get(metadata, "turn_trigger").String(), "turn %d", i+1)
+				turnID := gjson.Get(metadata, "turn_id").String()
+				require.NotEmpty(t, turnID)
+				if i == 0 {
+					firstTurnID = turnID
+				} else {
+					require.NotEqual(t, firstTurnID, turnID, "turn %d inherited the first turn ID", i+1)
+				}
+				responseID := "resp_trigger_" + strconv.Itoa(i+1)
+				upstream.Send(`{"type":"response.completed","response":{"id":"` + responseID + `","model":"gpt-5.1"}}`)
+				_, completed, err := conn.Read(ctx)
+				require.NoError(t, err)
+				require.Equal(t, responseID, gjson.GetBytes(completed, "response.id").String())
+			}
+			_ = conn.Close(coderws.StatusNormalClosure, "done")
+			select {
+			case err := <-serverErr:
+				if err != nil {
+					require.Contains(t, err.Error(), "StatusNormalClosure")
+				}
+			case <-ctx.Done():
+				t.Fatal("websocket relay did not finish")
+			}
+			dialer.mu.Lock()
+			defer dialer.mu.Unlock()
+			require.Len(t, dialer.requestHeaders, 1)
+			require.Equal(t, "user", codexTurnTriggerFromMetadata(dialer.requestHeaders[0].Get(openAIWSTurnMetadataHeader)))
+			require.Equal(t, "codex_cli_rs", dialer.requestHeaders[0].Get("originator"))
 		})
 	}
 }
@@ -4329,10 +4514,11 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_RejectsMessageID
 }
 
 type openAIWSQueueDialer struct {
-	mu        sync.Mutex
-	conns     []openAIWSClientConn
-	dialCount int
-	handshake http.Header
+	mu             sync.Mutex
+	conns          []openAIWSClientConn
+	dialCount      int
+	handshake      http.Header
+	requestHeaders []http.Header
 }
 
 func (d *openAIWSQueueDialer) Dial(
@@ -4343,11 +4529,11 @@ func (d *openAIWSQueueDialer) Dial(
 ) (openAIWSClientConn, int, http.Header, error) {
 	_ = ctx
 	_ = wsURL
-	_ = headers
 	_ = proxyURL
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.dialCount++
+	d.requestHeaders = append(d.requestHeaders, headers.Clone())
 	if len(d.conns) == 0 {
 		return nil, 503, nil, errors.New("no test conn")
 	}

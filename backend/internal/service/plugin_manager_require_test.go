@@ -133,3 +133,25 @@ func TestRejectUnboundOpenAIOAuthWSAccount(t *testing.T) {
 	assert.NoError(t, svc.rejectUnboundOpenAIOAuthWSAccount(nil))
 	assert.NoError(t, (&OpenAIGatewayService{}).rejectUnboundOpenAIOAuthWSAccount(oauth))
 }
+
+// /messages 桥接、账号测试、模型清单等入口直接调用 RoundTripOpenAIOAuth，不经过
+// useHTTPForOpenAIOAuthPlugin 的路由预判。允许回落的分支必须自己报告，否则这些入口
+// 会在「插件已安装但未绑定」时静默降级到内置 Go 传输层。
+func TestRoundTripOpenAIOAuthReportsBuiltinFallback(t *testing.T) {
+	account := &Account{ID: 9182, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		Credentials: map[string]any{"chatgpt_account_id": "acc-9182"}}
+	openAIOAuthFallbackWarned.Delete(account.ID)
+	t.Cleanup(func() { openAIOAuthFallbackWarned.Delete(account.ID) })
+
+	manager := &PluginManager{cfg: &config.Config{Plugins: config.PluginConfig{RequireOpenAIOAuthPlugin: false}}}
+	req, err := http.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil)
+	require.NoError(t, err)
+
+	resp, handled, err := manager.RoundTripOpenAIOAuth(context.Background(), req, "", account)
+	require.NoError(t, err)
+	require.False(t, handled, "未绑定插件且未强制要求时必须回落内置传输层")
+	require.Nil(t, resp)
+
+	_, warned := openAIOAuthFallbackWarned.Load(account.ID)
+	require.True(t, warned, "回落必须被报告，否则降级不可观测")
+}

@@ -122,7 +122,7 @@ func TestCodexTurnMetadataShapeSerializesInOfficialOrder(t *testing.T) {
 func TestCodexMetadataShapeDefaultsKeepClientValues(t *testing.T) {
 	account := newCodexMetadataShapeAccount()
 	metadata := map[string]any{"turn_id": "t-1", "turn_trigger": "tui", "sandbox": "none"}
-	_, err := ensureCodexMetadataShapeDefaults(metadata, map[string]any{}, []byte(`{"model":"m"}`), account, false)
+	_, err := ensureCodexMetadataShapeDefaults(metadata, map[string]any{}, []byte(`{"model":"m"}`), account, false, "")
 	require.NoError(t, err)
 	require.Equal(t, "tui", metadata["turn_trigger"])
 	require.Equal(t, "none", metadata["sandbox"])
@@ -146,7 +146,7 @@ func TestCodexMetadataShapeRootTurnID(t *testing.T) {
 
 	t.Run("no parent", func(t *testing.T) {
 		metadata := map[string]any{"turn_id": "t-1"}
-		_, err := ensureCodexMetadataShapeDefaults(metadata, map[string]any{}, []byte(`{}`), account, false)
+		_, err := ensureCodexMetadataShapeDefaults(metadata, map[string]any{}, []byte(`{}`), account, false, "")
 		require.NoError(t, err)
 		require.Equal(t, "t-1", metadata["root_turn_id"])
 		require.Equal(t, "new", metadata["history_initialization"])
@@ -154,7 +154,7 @@ func TestCodexMetadataShapeRootTurnID(t *testing.T) {
 
 	t.Run("with parent", func(t *testing.T) {
 		metadata := map[string]any{"turn_id": "t-2", "parent_turn_id": "X"}
-		_, err := ensureCodexMetadataShapeDefaults(metadata, map[string]any{}, []byte(`{}`), account, false)
+		_, err := ensureCodexMetadataShapeDefaults(metadata, map[string]any{}, []byte(`{}`), account, false, "")
 		require.NoError(t, err)
 		require.Equal(t, "X", metadata["root_turn_id"])
 		require.Equal(t, "resume", metadata["history_initialization"])
@@ -180,7 +180,7 @@ func TestCodexMetadataShapeSandboxFollowsUserAgentOS(t *testing.T) {
 			account := newCodexMetadataShapeAccount()
 			account.Credentials["user_agent"] = tc.ua
 			metadata := map[string]any{"turn_id": "t-auto"}
-			_, err := ensureCodexMetadataShapeDefaults(metadata, map[string]any{}, []byte(`{}`), account, false)
+			_, err := ensureCodexMetadataShapeDefaults(metadata, map[string]any{}, []byte(`{}`), account, false, "")
 			require.NoError(t, err)
 			require.Equal(t, tc.want, metadata["sandbox"])
 		})
@@ -193,7 +193,7 @@ func TestCodexMetadataShapeHonorsSandboxConfig(t *testing.T) {
 	t.Cleanup(func() { SetCodexMetadataSandbox(config.CodexSandboxAuto, config.CodexSandboxModeReadOnly) })
 
 	metadata := map[string]any{"turn_id": "t-1"}
-	_, err := ensureCodexMetadataShapeDefaults(metadata, map[string]any{}, []byte(`{}`), newCodexMetadataShapeAccount(), false)
+	_, err := ensureCodexMetadataShapeDefaults(metadata, map[string]any{}, []byte(`{}`), newCodexMetadataShapeAccount(), false, "")
 	require.NoError(t, err)
 	require.Equal(t, config.CodexSandboxNone, metadata["sandbox"])
 	require.Equal(t, config.CodexSandboxModeDangerFullAccess, metadata["sandbox_mode"])

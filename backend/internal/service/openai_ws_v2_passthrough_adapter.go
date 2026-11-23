@@ -870,14 +870,19 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if buildHdrErr != nil {
 		return fmt.Errorf("build ws headers: %w", buildHdrErr)
 	}
+	declaredTurnTrigger := ""
+	if account.UsesOpenAICodexProtocol() {
+		declaredTurnTrigger = codexClientDeclaredTurnTrigger(headers, firstClientMessage)
+	}
 	if metadataBody, metadataChanged, metadataErr := normalizeCodexRequestMetadata(firstClientMessage, headers, account, false); metadataErr != nil {
 		return fmt.Errorf("normalize websocket handshake metadata: %w", metadataErr)
 	} else if metadataChanged {
 		firstClientMessage = metadataBody
 	}
-	// 归一化按旧习惯重写 session_id / x-codex-installation-id 头，握手前重新收口。
-	if account.UsesOpenAICodexProtocol() {
-		projectCodexOutboundHeaders(headers, true)
+	s.finalizeOpenAIWSHandshake(account, headers, declaredTurnTrigger)
+	followUpTurnTrigger := ""
+	if declaredTurnTrigger != "" {
+		followUpTurnTrigger = codexTurnTriggerFromMetadata(headers.Get(openAIWSTurnMetadataHeader))
 	}
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
@@ -1097,7 +1102,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					if fingerprintErr != nil {
 						return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket identity metadata", fingerprintErr)
 					}
-					metadataBody, _, metadataErr := normalizeCodexRequestMetadata(fingerprintBody, nil, account, false)
+					metadataBody, _, metadataErr := normalizeCodexRequestMetadataWithTurnTriggerFallback(fingerprintBody, nil, account, false, followUpTurnTrigger)
 					if metadataErr != nil {
 						return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket identity metadata", metadataErr)
 					}

@@ -955,6 +955,10 @@ func (m *PluginManager) RoundTripOpenAIOAuth(ctx context.Context, request *http.
 		if m.requiresOpenAIOAuthPlugin(account) {
 			return nil, true, errors.New(errOpenAIOAuthPluginNotBound)
 		}
+		// 这里是唯一真正允许「回落内置 Go 传输层」的分支。/messages 桥接、账号
+		// 测试、模型清单等入口直接调用本方法，不经过 useHTTPForOpenAIOAuthPlugin
+		// 的路由预判，因此告警必须挂在实际回落点，否则这些入口静默降级。
+		m.warnOpenAIOAuthPluginFallback(account)
 		return nil, false, nil
 	}
 	if route.runtime == nil {
@@ -1006,7 +1010,33 @@ func (m *PluginManager) MissingOpenAIOAuthPluginBinding(account *Account) bool {
 // whenever the account uses the plugin or must use it. RoundTrip enforces the
 // requirement again against the route in effect when the request is sent.
 func (m *PluginManager) useHTTPForOpenAIOAuthPlugin(account *Account) bool {
+	m.warnOpenAIOAuthPluginFallback(account)
 	return m.requiresOpenAIOAuthPlugin(account) || m.ShouldRouteOpenAIOAuth(account)
+}
+
+// openAIOAuthFallbackWarned 记录已就「回落内置传输层」告警过的账号，避免每请求刷日志。
+var openAIOAuthFallbackWarned sync.Map
+
+// warnOpenAIOAuthPluginFallback 在账号未命中插件绑定、因而回落内置 Go 传输层时告警一次。
+//
+// plugins.require_openai_oauth_plugin 默认为 false：插件安装后若没有账号命中绑定，
+// 从外部看与「没装插件」完全无法区分，P0 级的传输层伪装会在无人察觉的情况下失效。
+// 这里把回落变成可观测事件，而不是擅自翻转默认值去打破既有部署的可用性。
+func (m *PluginManager) warnOpenAIOAuthPluginFallback(account *Account) {
+	if m == nil || m.cfg == nil || account == nil || !account.IsOpenAIOAuth() {
+		return
+	}
+	if m.cfg.Plugins.RequireOpenAIOAuthPlugin || m.ShouldRouteOpenAIOAuth(account) {
+		return
+	}
+	if _, loaded := openAIOAuthFallbackWarned.LoadOrStore(account.ID, struct{}{}); loaded {
+		return
+	}
+	slog.Warn("openai_oauth_plugin_fallback",
+		"account_id", account.ID,
+		"reason", "账号未命中 OpenAI OAuth 出站插件绑定，回落内置 Go 传输层",
+		"hint", "绑定该账号到插件，或设置 plugins.require_openai_oauth_plugin=true 强制失败",
+	)
 }
 
 // ShouldRouteOpenAIOAuth 判断该账号是否命中当前 OpenAI OAuth 插件绑定。

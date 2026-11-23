@@ -1,7 +1,10 @@
 package service
 
 import (
+	"bytes"
+	"encoding/json"
 	"net/http"
+	"strconv"
 	"testing"
 
 	"github.com/MACOS-DO/sub4api/internal/config"
@@ -115,7 +118,7 @@ func TestEnforceCodexIdentityHeaders(t *testing.T) {
 				h.Set("version", tt.version)
 			}
 
-			enforceCodexIdentityHeaders(h)
+			enforceCodexIdentityHeadersWithOriginator(h, "", codexOriginatorForTurnTrigger(h))
 			projectCodexOutboundHeaders(h, false)
 
 			require.Equal(t, openai.CodexDefaultOriginator, h.Get("originator"))
@@ -138,7 +141,7 @@ func TestEnforceCodexIdentityHeadersWithAccountOverrideUA(t *testing.T) {
 		projectCodexOutboundHeaders(h, false)
 
 		require.Equal(t, "codex_vscode", h.Get("originator"))
-		require.Equal(t, "codex_vscode/"+codexCLIVersion+" (Ubuntu 22.4.0; x86_64) vscode", h.Get("user-agent"))
+		require.Equal(t, "codex_vscode/"+codexCLIVersion+" (Ubuntu 22.4.0; x86_64) vscode (codex_vscode; "+codexCLIVersion+")", h.Get("user-agent"))
 		require.Empty(t, h.Get("version"))
 	})
 
@@ -163,7 +166,7 @@ func TestEnforceCodexIdentityHeadersWithAccountOverrideUA(t *testing.T) {
 		enforceCodexIdentityHeadersWithUA(h, "codex_cli_rs/0.125.0 (Ubuntu 22.4.0; x86_64) xterm-256color")
 
 		require.Equal(t, "codex_cli_rs", h.Get("originator"))
-		require.Equal(t, "codex_cli_rs/"+codexCLIVersion+" (Ubuntu 22.4.0; x86_64) xterm-256color", h.Get("user-agent"))
+		require.Equal(t, "codex_cli_rs/"+codexCLIVersion+" (Ubuntu 22.4.0; x86_64) xterm-256color (codex_cli_rs; "+codexCLIVersion+")", h.Get("user-agent"))
 		require.Empty(t, h.Get("version"))
 		require.NotContains(t, h.Get("user-agent"), "0.125.0")
 	})
@@ -171,7 +174,7 @@ func TestEnforceCodexIdentityHeadersWithAccountOverrideUA(t *testing.T) {
 	// 陈旧覆写 UA 同样跟随自动同步到的新版本，无需管理员重新编辑那条 UA。
 	t.Run("陈旧覆写 UA 跟随同步版本", func(t *testing.T) {
 		SetCodexCanonicalUserAgentResolver(func() string {
-			return "codex_cli_rs/0.200.1" + codexCLIUserAgentSuffix
+			return buildCodexCLIUserAgent("0.200.1")
 		})
 		t.Cleanup(func() { SetCodexCanonicalUserAgentResolver(nil) })
 
@@ -181,7 +184,7 @@ func TestEnforceCodexIdentityHeadersWithAccountOverrideUA(t *testing.T) {
 		enforceCodexIdentityHeadersWithUA(h, "codex-tui/0.125.0 (Mac OS X 14.0; arm64) iTerm")
 
 		require.Equal(t, openai.CodexCLIOriginator, h.Get("originator"))
-		require.Equal(t, "codex_cli_rs/0.200.1 (Mac OS X 14.0; arm64) iTerm", h.Get("user-agent"))
+		require.Equal(t, "codex_cli_rs/0.200.1 (Mac OS X 14.0; arm64) iTerm (codex_cli_rs; 0.200.1)", h.Get("user-agent"))
 		require.Empty(t, h.Get("version"))
 	})
 }
@@ -202,7 +205,7 @@ func TestEnforceCodexIdentityHeadersFollowsCanonicalResolver(t *testing.T) {
 	enforceCodexIdentityHeaders(h)
 
 	require.Equal(t, "codex_cli_rs", h.Get("originator"))
-	require.Equal(t, "codex_cli_rs/0.200.1 (Ubuntu 22.4.0; x86_64) xterm-256color", h.Get("user-agent"))
+	require.Equal(t, "codex_cli_rs/0.200.1 (Ubuntu 22.4.0; x86_64) xterm-256color (codex_cli_rs; 0.200.1)", h.Get("user-agent"))
 	require.Empty(t, h.Get("version"))
 }
 
@@ -324,7 +327,7 @@ func TestNormalizeCodexClientVersion(t *testing.T) {
 }
 
 func TestBuildCodexCLIUserAgent(t *testing.T) {
-	require.Equal(t, openai.CodexDefaultOriginator+"/0.200.1"+codexCLIUserAgentSuffix, buildCodexCLIUserAgent("0.200.1"))
+	require.Equal(t, openai.CodexDefaultOriginator+"/0.200.1"+codexCLIUserAgentPlatform+" (codex_cli_rs; 0.200.1)", buildCodexCLIUserAgent("0.200.1"))
 	// 非法版本号必须回退到内置 UA，不能拼出畸形身份。
 	require.Equal(t, codexCLIUserAgent, buildCodexCLIUserAgent("bogus version"))
 	require.Equal(t, codexCLIUserAgent, buildCodexCLIUserAgent(""))
@@ -332,17 +335,17 @@ func TestBuildCodexCLIUserAgent(t *testing.T) {
 
 func TestCodexCanonicalUserAgentFollowsResolver(t *testing.T) {
 	SetCodexCanonicalUserAgentResolver(func() string {
-		return "codex_cli_rs/0.200.1" + codexCLIUserAgentSuffix
+		return buildCodexCLIUserAgent("0.200.1")
 	})
 	t.Cleanup(func() { SetCodexCanonicalUserAgentResolver(nil) })
 
-	require.Equal(t, "codex_cli_rs/0.200.1"+codexCLIUserAgentSuffix, CodexCanonicalUserAgent())
+	require.Equal(t, buildCodexCLIUserAgent("0.200.1"), CodexCanonicalUserAgent())
 	require.Equal(t, "0.200.1", CodexCanonicalClientVersion())
 
 	h := make(http.Header)
 	ApplyCodexCanonicalAuthIdentity(h)
 	require.Equal(t, "codex_cli_rs", h.Get("originator"))
-	require.Equal(t, "codex_cli_rs/0.200.1"+codexCLIUserAgentSuffix, h.Get("user-agent"))
+	require.Equal(t, buildCodexCLIUserAgent("0.200.1"), h.Get("user-agent"))
 	// 凭据面不发 version 头（真实客户端在 auth.openai.com 只带 originator + UA）。
 	require.Empty(t, h.Get("version"))
 }
@@ -352,4 +355,165 @@ func TestCodexCanonicalUserAgentFallsBackWithoutResolver(t *testing.T) {
 
 	require.Equal(t, codexCLIUserAgent, CodexCanonicalUserAgent())
 	require.Equal(t, codexCLIVersion, CodexCanonicalClientVersion())
+}
+
+// 真实客户端的 UA / originator / turn metadata 是同源三元组：
+// `originator: codex_exec` ↔ `"turn_trigger":"exec"`（实测逐字节一致）。
+// 强制统一出站身份时若不跟随 turn_trigger，就会发出「UA 声称交互式 TUI、
+// 请求元数据声称非交互 exec」的自相矛盾身份。
+func TestEnforceCodexIdentityFollowsTurnTrigger(t *testing.T) {
+	SetCodexCanonicalUserAgentResolver(func() string { return buildCodexCLIUserAgent("0.200.1") })
+	t.Cleanup(func() { SetCodexCanonicalUserAgentResolver(nil) })
+
+	for _, tc := range []struct {
+		name       string
+		trigger    string
+		wantOrigin string
+	}{
+		{name: "exec", trigger: "exec", wantOrigin: "codex_exec"},
+		{name: "user", trigger: "user", wantOrigin: "codex_cli_rs"},
+		{name: "empty", trigger: "", wantOrigin: "codex_cli_rs"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := make(http.Header)
+			h.Set("originator", "codex_cli_rs")
+			h.Set("user-agent", buildCodexCLIUserAgent("0.200.1"))
+			if tc.trigger != "" {
+				h.Set(openAIWSTurnMetadataHeader, `{"thread_id":"01a2064b-8ab7-75c3-8517-bd927169a05a","turn_trigger":"`+tc.trigger+`"}`)
+			}
+
+			enforceCodexIdentityHeadersWithOriginator(h, "", codexOriginatorForTurnTrigger(h))
+
+			require.Equal(t, tc.wantOrigin, h.Get("originator"))
+			require.Equal(t, buildCodexUserAgentFor(tc.wantOrigin, "0.200.1"), h.Get("user-agent"))
+			require.Contains(t, h.Get("user-agent"), "("+tc.wantOrigin+"; 0.200.1)",
+				"尾部标识组必须与首段同源")
+		})
+	}
+}
+
+// UA 尾部 `(client; version)` 组是 codex-rs 写入 clientInfo 的位置，真实客户端恒发。
+// 版本重建必须同时刷新首段与尾部，不能拼出首尾版本不一致的身份。
+func TestCodexUserAgentCarriesConsistentTrailer(t *testing.T) {
+	ua := buildCodexCLIUserAgent("0.200.1")
+	require.Equal(t, "codex_cli_rs/0.200.1"+codexCLIUserAgentPlatform+" (codex_cli_rs; 0.200.1)", ua)
+	require.Equal(t, "0.200.1", openai.CodexUserAgentVersion(ua))
+
+	rebuilt := openai.SetCodexUserAgentVersion(ua, "0.201.0")
+	require.Equal(t, "codex_cli_rs/0.201.0"+codexCLIUserAgentPlatform+" (codex_cli_rs; 0.201.0)", rebuilt)
+
+	// 切换 originator 时首段与尾部一起换，不能只换一处。
+	swapped := openai.SwapCodexUserAgentClient(ua, "codex_exec")
+	require.Equal(t, "codex_exec/0.200.1"+codexCLIUserAgentPlatform+" (codex_exec; 0.200.1)", swapped)
+
+	// TUI → CLI 归一化保留尾部组并改名，不再丢弃。
+	_, normalized, ok := openai.NormalizeCodexClientIdentityToCLI(
+		"codex-tui", "codex-tui/0.200.1"+codexCLIUserAgentPlatform+" (codex-tui; 0.200.1)")
+	require.True(t, ok)
+	require.Equal(t, "codex_cli_rs/0.200.1"+codexCLIUserAgentPlatform+" (codex_cli_rs; 0.200.1)", normalized)
+}
+
+// 身份必须跟随**合并后**的元数据。applyCodexRequestMetadata 以请求体为准归一
+// turn metadata 并回写 x-codex-turn-metadata 头；若身份在合并之前按客户端原始头
+// 决定，就会出现「出站元数据写 user、originator/UA 写 codex_exec」的三元组矛盾。
+func TestCodexIdentityFollowsMergedTurnMetadata(t *testing.T) {
+	SetCodexCanonicalUserAgentResolver(func() string { return buildCodexCLIUserAgent("0.171.0") })
+	t.Cleanup(func() { SetCodexCanonicalUserAgentResolver(nil) })
+
+	account := &Account{ID: 11, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		Credentials: map[string]any{"chatgpt_account_id": "acc-11", "chatgpt_user_id": "user-11"}}
+	const ids = `"installation_id":"a3f880d7-091f-4604-9c0f-87e4a5016e99","session_id":"01a2064b-8ab7-75c3-8517-bd927169a05a","thread_id":"01a2064b-8ab7-75c3-8517-bd927169a05a","turn_id":"01a2064b-8aca-7672-8207-879f6d4e26bf","window_id":"01a2064b-8ab7-75c3-8517-bd927169a05a:0"`
+	headerMeta := `{` + ids + `,"turn_trigger":"exec"}`
+	bodyMeta := `{` + ids + `,"turn_trigger":"user"}`
+	body := `{"model":"gpt-5.6-luna","input":[],"client_metadata":{"x-codex-turn-metadata":` +
+		strconv.Quote(bodyMeta) + `,"thread_id":"01a2064b-8ab7-75c3-8517-bd927169a05a","session_id":"01a2064b-8ab7-75c3-8517-bd927169a05a"}}`
+
+	req, err := http.NewRequest("POST", "https://chatgpt.com/backend-api/codex/responses", bytes.NewReader([]byte(body)))
+	require.NoError(t, err)
+	req.Header.Set("originator", "codex_exec")
+	req.Header.Set("session-id", "01a2064b-8ab7-75c3-8517-bd927169a05a")
+	req.Header.Set("thread-id", "01a2064b-8ab7-75c3-8517-bd927169a05a")
+	req.Header.Set(openAIWSTurnMetadataHeader, headerMeta)
+
+	// 合并前：客户端原始头声明 exec。
+	require.Equal(t, codexExecOriginator, codexOriginatorForTurnTrigger(req.Header))
+
+	merged, err := applyCodexRequestMetadata(req, []byte(body), account, false)
+	require.NoError(t, err)
+	require.NotEmpty(t, merged)
+
+	// 合并后：请求体的 user 生效，头已被回写。
+	require.Empty(t, codexOriginatorForTurnTrigger(req.Header),
+		"合并后生效的 turn_trigger 是 user，不应再判定为 exec")
+
+	enforceCodexIdentityHeadersWithUA(req.Header, "")
+	require.Equal(t, "codex_cli_rs", req.Header.Get("originator"))
+	require.Contains(t, req.Header.Get("user-agent"), "(codex_cli_rs; 0.171.0)")
+	require.NotContains(t, req.Header.Get("user-agent"), "codex_exec")
+}
+
+// WS 握手的身份规则必须与 HTTP 完全一致：显式声明 turn_trigger=exec 时切到 codex_exec，
+// 且要在首帧元数据归一化完成之后决定——归一化才会给出最终生效值。
+// 未声明 turn_trigger 的请求保持 codex_cli_rs：归一化补的 exec 是网关合成的形状值，
+// 不是客户端身份，不能拿来切换 originator（否则自建探针会被误判成 codex_exec）。
+func TestWebSocketHandshakeIdentityFollowsExplicitExecTrigger(t *testing.T) {
+	SetCodexCanonicalUserAgentResolver(func() string { return buildCodexCLIUserAgent("0.171.0") })
+	t.Cleanup(func() { SetCodexCanonicalUserAgentResolver(nil) })
+
+	account := &Account{ID: 11, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		Credentials: map[string]any{"chatgpt_account_id": "acc-11", "chatgpt_user_id": "user-11"}}
+	const (
+		thread = "01a2064b-8ab7-75c3-8517-bd927169a05a"
+		turn   = "01a2064b-8aca-7672-8207-879f6d4e26bf"
+		inst   = "a3f880d7-091f-4604-9c0f-87e4a5016e99"
+	)
+	base := `"installation_id":"` + inst + `","session_id":"` + thread + `","thread_id":"` + thread +
+		`","turn_id":"` + turn + `","window_id":"` + thread + `:0"`
+
+	// 复刻 openai_ws_forwarder_v2 的握手顺序：写入客户端元数据 → 归一化首帧 → 身份收口。
+	handshake := func(t *testing.T, headerMeta string, payload map[string]any) http.Header {
+		t.Helper()
+		headers := http.Header{}
+		headers.Set("originator", "codex_cli_rs")
+		headers.Set("user-agent", buildCodexCLIUserAgent("0.171.0"))
+		headers.Set(openAIWSTurnMetadataHeader, headerMeta)
+
+		declared := codexClientDeclaredTurnTrigger(headers, nil)
+		require.NoError(t, normalizeCodexRequestMetadataMap(payload, headers, account))
+		if declared != "" {
+			enforceCodexIdentityHeadersWithOriginator(headers, "", codexOriginatorForTurnTrigger(headers))
+		}
+		return headers
+	}
+
+	t.Run("显式 exec", func(t *testing.T) {
+		headers := handshake(t, `{`+base+`,"turn_trigger":"exec"}`,
+			map[string]any{"model": "gpt-5.6-luna", "input": []any{}})
+		require.Equal(t, codexExecOriginator, headers.Get("originator"))
+		require.Equal(t, buildCodexUserAgentFor(codexExecOriginator, "0.171.0"), headers.Get("user-agent"))
+
+		var merged map[string]any
+		require.NoError(t, json.Unmarshal([]byte(headers.Get(openAIWSTurnMetadataHeader)), &merged))
+		require.Equal(t, "exec", merged["turn_trigger"])
+	})
+
+	t.Run("未声明 trigger 时保持 CLI", func(t *testing.T) {
+		headers := handshake(t, `{`+base+`}`,
+			map[string]any{"model": "gpt-5.6-luna", "input": []any{}})
+		require.Equal(t, "codex_cli_rs", headers.Get("originator"),
+			"归一化补的 turn_trigger=exec 是形状默认值，不构成客户端身份")
+		require.Contains(t, headers.Get("user-agent"), "(codex_cli_rs; 0.171.0)")
+	})
+
+	t.Run("头声明 exec 首帧声明 user 时以首帧为准", func(t *testing.T) {
+		payload := map[string]any{
+			"model": "gpt-5.6-luna", "input": []any{},
+			"client_metadata": map[string]any{
+				openAIWSTurnMetadataHeader: `{` + base + `,"turn_trigger":"user"}`,
+			},
+		}
+		headers := handshake(t, `{`+base+`,"turn_trigger":"exec"}`, payload)
+		require.Equal(t, "codex_cli_rs", headers.Get("originator"))
+		require.NotContains(t, headers.Get("user-agent"), "codex_exec")
+	})
 }

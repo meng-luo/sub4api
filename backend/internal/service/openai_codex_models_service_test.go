@@ -3904,3 +3904,30 @@ func TestGPT61SolAPIKeyCatalogContextWindow(t *testing.T) {
 		})
 	}
 }
+
+// 上游 /backend-api/codex/models 只接受合法 client_version：
+// 缺参数 400 "Field required"，空值 400 "Invalid client_version format"（实测）。
+// 客户端未声明时必须回落到网关规范版本，不能把必然失败的请求发出去。
+func TestBuildCodexModelsManifestURLEmptyClientVersionFallsBack(t *testing.T) {
+	SetCodexCanonicalUserAgentResolver(func() string { return buildCodexCLIUserAgent("0.171.0") })
+	t.Cleanup(func() { SetCodexCanonicalUserAgentResolver(nil) })
+
+	const endpoint = "https://chatgpt.com/backend-api/codex"
+	for _, tc := range []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "空值", input: "", want: "0.171.0"},
+		{name: "纯空白", input: "   ", want: "0.171.0"},
+		{name: "客户端显式声明", input: "0.169.0", want: "0.169.0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			u, err := buildCodexModelsManifestURL(endpoint, true, tc.input)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, u.Query().Get("client_version"))
+			require.NotEmpty(t, u.Query().Get("client_version"),
+				"client_version 为空会被上游 400")
+		})
+	}
+}

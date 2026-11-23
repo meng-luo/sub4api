@@ -797,6 +797,43 @@ func TestOpenAIWSConnPool_AcquireReusesOnlyMatchingBetaFeatures(t *testing.T) {
 	require.Equal(t, 2, dialer.DialCount())
 }
 
+func TestOpenAIWSConnPool_AcquireReusesOnlyMatchingCodexOriginator(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 2
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 2
+	pool := newOpenAIWSConnPool(cfg)
+	defer pool.Close()
+	dialer := &openAIWSCountingDialer{}
+	pool.setClientDialerForTest(dialer)
+
+	req := openAIWSAcquireRequest{
+		Account: &Account{ID: 128, Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+		WSURL:   "wss://example.com/v1/responses",
+		Headers: make(http.Header),
+	}
+	req.Headers.Set("originator", "codex_cli_rs")
+	cli, err := pool.Acquire(context.Background(), req)
+	require.NoError(t, err)
+	cliID := cli.ConnID()
+	cli.Release()
+
+	req.PreferredConnID = cliID
+	req.Headers.Set("originator", "codex_exec")
+	exec, err := pool.Acquire(context.Background(), req)
+	require.NoError(t, err)
+	require.False(t, exec.Reused())
+	execID := exec.ConnID()
+	require.NotEqual(t, cliID, execID)
+	exec.Release()
+
+	sameOriginator, err := pool.Acquire(context.Background(), req)
+	require.NoError(t, err)
+	defer sameOriginator.Release()
+	require.True(t, sameOriginator.Reused())
+	require.Equal(t, execID, sameOriginator.ConnID())
+	require.Equal(t, 2, dialer.DialCount())
+}
+
 func activeCodexFingerprintPoolAccountForTest(id int64) *Account {
 	return &Account{
 		ID:       id,

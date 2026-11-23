@@ -1651,9 +1651,22 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	setOpenAICodexRoutingHintFromBody(req.Header, account, body)
 	logOpenAIRoutingDiagnosticsFromBody(ctx, account, "http", req.Header, body, "not_applicable")
 
+	// 客户端是否真的声明过 turn_trigger 必须在元数据合并前采集：合并会给缺省请求
+	// 补 turn_trigger=exec（网关合成的形状值），那是请求形状而不是客户端身份。
+	declaredTrigger := ""
+	if codexLane && !compatMessagesBridge {
+		declaredTrigger = codexClientDeclaredTurnTrigger(req.Header, body)
+	}
 	body, err = applyCodexRequestMetadata(req, body, account, legacyCompactRequest)
 	if err != nil {
 		return nil, err
+	}
+	// 身份必须跟随**合并后**的元数据：applyCodexRequestMetadata 以请求体为准归一
+	// turn metadata 并回写 x-codex-turn-metadata 头。上面那次 enforce 读的是客户端
+	// 原始头，若头声明 turn_trigger=exec、请求体声明 user，最终出站元数据是 user
+	// 而身份已切成 codex_exec，形成自相矛盾的三元组。
+	if declaredTrigger != "" {
+		enforceCodexIdentityHeadersWithOriginator(req.Header, s.codexIdentityOverrideUA(account), codexOriginatorForTurnTrigger(req.Header))
 	}
 	// 终态线序收口：必须在账号 namespace、指纹收敛、client_metadata 投影与账号级
 	// 覆写全部完成之后执行。上述每一步都按代理习惯补齐过 version / OpenAI-Beta /

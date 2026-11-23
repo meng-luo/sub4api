@@ -257,6 +257,19 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeadersWithTicket(
 	return headers, sessionResolution, ticket, nil
 }
 
+// finalizeOpenAIWSHandshake runs after the first frame and header metadata have
+// been merged. Only a client declaration can select a different identity.
+func (s *OpenAIGatewayService) finalizeOpenAIWSHandshake(account *Account, headers http.Header, declaredTrigger string) {
+	if !account.UsesOpenAICodexProtocol() {
+		return
+	}
+	if declaredTrigger != "" {
+		originator := codexOriginatorForTurnTrigger(headers)
+		enforceCodexIdentityHeadersWithOriginator(headers, s.codexIdentityOverrideUA(account), originator)
+	}
+	projectCodexOutboundHeaders(headers, true)
+}
+
 func (s *OpenAIGatewayService) buildOpenAIWSCreatePayload(reqBody map[string]any, account *Account) map[string]any {
 	// OpenAI WS Mode 协议：response.create 字段与 HTTP /responses 基本一致。
 	// 保留 stream 字段（与 Codex CLI 一致），仅移除 background。

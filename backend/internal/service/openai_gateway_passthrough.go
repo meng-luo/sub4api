@@ -736,9 +736,18 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	setOpenAICodexRoutingHintFromBody(req.Header, account, body)
 	logOpenAIRoutingDiagnosticsFromBody(ctx, account, "http_passthrough", req.Header, body, "not_applicable")
 
+	declaredTrigger := ""
+	if account.UsesOpenAICodexProtocol() {
+		declaredTrigger = codexClientDeclaredTurnTrigger(req.Header, body)
+	}
 	body, err = applyCodexRequestMetadata(req, body, account, legacyCompactRequest)
 	if err != nil {
 		return nil, err
+	}
+	// 同 forwardWithoutHostedWebSearch：合并后的元数据才是生效值；仅在客户端确实
+	// 声明过 turn_trigger 时按它重新收口，避免把网关合成的 exec 当成客户端身份。
+	if declaredTrigger != "" {
+		enforceCodexIdentityHeadersWithOriginator(req.Header, s.codexIdentityOverrideUA(account), codexOriginatorForTurnTrigger(req.Header))
 	}
 	// 终态线序收口：与 Forward() 使用同一官方 /responses 线序，删除官方在该传输上
 	// 从不发送、由代理各环节按习惯补齐的头（见 codexHTTPNonOfficialHeaders 与

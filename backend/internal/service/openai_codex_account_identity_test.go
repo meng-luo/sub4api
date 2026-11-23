@@ -3,15 +3,18 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/MACOS-DO/sub4api/internal/config"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -319,4 +322,132 @@ func TestCodexForkKeepsParentPromptCacheKeyUpstream(t *testing.T) {
 				"a caller-chosen key keeps its own namespace")
 		})
 	}
+}
+
+// 官方 Codex 客户端对同一份身份有多个出口，且它们在真机上恒等：
+// session_id == thread_id == x-client-request-id == window_id 前缀 == prompt_cache_key，
+// 新 turn 时 turn_id == root_turn_id，且所有会话/轮次标识都是 UUIDv7，
+// 只有 installation_id 是 UUIDv4。
+//
+// 账号级 namespace 改写必须逐条保住这些关系：种子若按字段名派生，同样的原值会
+// 派生出不同结果，出站就成了「session_id 与 thread_id 互不相等」这种真实客户端
+// 永远发不出的形状。
+func TestCodexAccountIdentityPreservesOfficialCodexIdentities(t *testing.T) {
+	const (
+		thread = "01a2064b-8ab7-75c3-8517-bd927169a05a"
+		turn   = "01a2064b-8aca-7672-8207-879f6d4e26bf"
+		ctxWin = "01a2064b-8aba-7070-a8cf-65af63980838"
+		inst   = "a3f880d7-091f-4604-9c0f-87e4a5016e99"
+	)
+	embedded := `{"installation_id":"` + inst + `","session_id":"` + thread + `","thread_id":"` + thread +
+		`","turn_id":"` + turn + `","root_turn_id":"` + turn + `","window_id":"` + thread + `:0","window_number":0,"context_window_id":"` + ctxWin +
+		`","turn_started_at_unix_ms":1795401943756}`
+	body := []byte(`{"prompt_cache_key":"` + thread + `","client_metadata":{"thread_id":"` + thread +
+		`","root_turn_id":"` + turn + `","turn_id":"` + turn + `","session_id":"` + thread +
+		`","x-codex-installation-id":"` + inst + `","x-codex-window-id":"` + thread + `:0","context_window_id":"` + ctxWin +
+		`","x-codex-turn-metadata":` + strconv.Quote(embedded) + `}}`)
+	account := &Account{ID: 11, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		Credentials: map[string]any{"chatgpt_account_id": "chatgpt-account-11", "chatgpt_user_id": "user-11"}}
+
+	scoped, changed, err := applyCodexAccountIdentityClientMetadataRaw(body, account, 77, thread)
+	require.NoError(t, err)
+	require.True(t, changed)
+
+	value := func(path string) string { return gjson.GetBytes(scoped, path).String() }
+	session := value("client_metadata.session_id")
+	scopedThread := value("client_metadata.thread_id")
+	scopedTurn := value("client_metadata.turn_id")
+	scopedRootTurn := value("client_metadata.root_turn_id")
+	scopedWindow := value("client_metadata.x-codex-window-id")
+	scopedCtx := value("client_metadata.context_window_id")
+	scopedInst := value("client_metadata.x-codex-installation-id")
+
+	// 恒等关系逐条保住。
+	require.Equal(t, scopedThread, session, "session_id 必须等于 thread_id")
+	require.Equal(t, scopedThread, value("prompt_cache_key"), "prompt_cache_key 必须等于 thread_id")
+	require.Equal(t, scopedThread+":0", scopedWindow, "window_id 必须是 thread_id + 序号")
+	require.Equal(t, scopedTurn, scopedRootTurn, "新 turn 的 root_turn_id 必须等于 turn_id")
+
+	// 不该相等的必须不相等。
+	require.NotEqual(t, scopedThread, scopedTurn, "turn_id 必须与 thread_id 不同")
+	require.NotEqual(t, scopedThread, scopedCtx, "context_window_id 必须与 thread_id 不同")
+	require.NotEqual(t, scopedInst, scopedThread)
+
+	// 版本形态：会话/轮次/上下文窗口是 v7，installation 是 v4。
+	for name, raw := range map[string]string{
+		"session_id": session, "thread_id": scopedThread, "turn_id": scopedTurn,
+		"root_turn_id": scopedRootTurn, "context_window_id": scopedCtx,
+	} {
+		parsed, parseErr := uuid.Parse(raw)
+		require.NoErrorf(t, parseErr, "%s 必须是合法 UUID: %s", name, raw)
+		require.Equalf(t, uuid.Version(7), parsed.Version(), "%s 必须是 UUIDv7: %s", name, raw)
+	}
+	parsedInst, err := uuid.Parse(scopedInst)
+	require.NoError(t, err)
+	require.Equal(t, uuid.Version(4), parsedInst.Version(), "installation_id 必须是 UUIDv4")
+
+	// 内嵌 metadata 与扁平 metadata 必须同源，不能各改一套。
+	var nested map[string]any
+	require.NoError(t, json.Unmarshal([]byte(value("client_metadata.x-codex-turn-metadata")), &nested))
+	require.Equal(t, scopedThread, nested["session_id"])
+	require.Equal(t, scopedThread, nested["thread_id"])
+	require.Equal(t, scopedTurn, nested["turn_id"])
+	require.Equal(t, scopedRootTurn, nested["root_turn_id"])
+	require.Equal(t, scopedWindow, nested["window_id"])
+	require.Equal(t, scopedCtx, nested["context_window_id"])
+
+	// turn_id 保留原值的 v7 时间戳，仍可与 turn_started_at_unix_ms 交叉验证。
+	scopedTurnUUID, err := uuid.Parse(scopedTurn)
+	require.NoError(t, err)
+	originalTurnUUID, err := uuid.Parse(turn)
+	require.NoError(t, err)
+	require.Equal(t,
+		int64(binary.BigEndian.Uint16(originalTurnUUID[0:2]))<<32|int64(binary.BigEndian.Uint32(originalTurnUUID[2:6])),
+		int64(binary.BigEndian.Uint16(scopedTurnUUID[0:2]))<<32|int64(binary.BigEndian.Uint32(scopedTurnUUID[2:6])),
+		"改写必须保留 turn_id 的 v7 时间戳",
+	)
+}
+
+// 子线程通过两个出口引用父线程：元数据 parent_thread_id 与握手头
+// x-codex-parent-thread-id（openai_ws_forwarder_payload.go 逐字转发该头）。
+// 只改写其中一处会让同一请求携带两个不同的父线程引用。
+func TestCodexAccountIdentityKeepsParentThreadReferenceConsistent(t *testing.T) {
+	const (
+		parent = "01a2064b-8ab7-75c3-8517-bd927169a05a"
+		child  = "01a2064b-8b01-7111-9a2b-000000000001"
+		turn   = "01a2064b-8aca-7672-8207-879f6d4e26bf"
+		inst   = "a3f880d7-091f-4604-9c0f-87e4a5016e99"
+	)
+	embedded := `{"installation_id":"` + inst + `","session_id":"` + child + `","thread_id":"` + child +
+		`","turn_id":"` + turn + `","root_turn_id":"` + turn + `","parent_thread_id":"` + parent + `"}`
+	body := []byte(`{"client_metadata":{"thread_id":"` + child + `","session_id":"` + child +
+		`","parent_thread_id":"` + parent + `","x-codex-turn-metadata":` + strconv.Quote(embedded) + `}}`)
+	account := &Account{ID: 11, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		Credentials: map[string]any{"chatgpt_account_id": "chatgpt-account-11", "chatgpt_user_id": "user-11"}}
+
+	headers := http.Header{}
+	headers.Set("thread-id", child)
+	headers.Set(codexParentThreadIDHeader, parent)
+	applyCodexAccountIdentityHeaders(headers, account, 77)
+
+	scoped, changed, err := applyCodexAccountIdentityClientMetadataRaw(body, account, 77, child)
+	require.NoError(t, err)
+	require.True(t, changed)
+
+	scopedHeader := headers.Get(codexParentThreadIDHeader)
+	require.NotEmpty(t, scopedHeader)
+	require.NotEqual(t, parent, scopedHeader, "父线程引用必须随账号重新派生")
+	require.Equal(t, gjson.GetBytes(scoped, "client_metadata.parent_thread_id").String(), scopedHeader,
+		"握手头与元数据必须引用同一个父线程")
+
+	var nested map[string]any
+	require.NoError(t, json.Unmarshal([]byte(gjson.GetBytes(scoped, "client_metadata.x-codex-turn-metadata").String()), &nested))
+	require.Equal(t, scopedHeader, nested["parent_thread_id"],
+		"内嵌元数据同样必须引用同一个父线程")
+
+	// 派生值仍是合法 UUIDv7，且与子线程不同。
+	parsed, err := uuid.Parse(scopedHeader)
+	require.NoError(t, err)
+	require.Equal(t, uuid.Version(7), parsed.Version())
+	require.NotEqual(t, headers.Get("thread-id"), scopedHeader)
 }

@@ -188,15 +188,18 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	if buildHdrErr != nil {
 		return nil, fmt.Errorf("build ws headers: %w", buildHdrErr)
 	}
+	// 客户端是否真的声明过 turn_trigger 必须在归一化之前采集：归一化会给缺省请求补
+	// turn_trigger=exec（网关合成的形状值），拿它切身份会把自建探针也变成 codex_exec。
+	declaredTurnTrigger := ""
+	if account.UsesOpenAICodexProtocol() {
+		clientMetadata, _ := payload["client_metadata"].(map[string]any)
+		embedded, _ := clientMetadata[openAIWSTurnMetadataHeader].(string)
+		declaredTurnTrigger = codexClientDeclaredTurnTriggerFromMetadata(wsHeaders, embedded)
+	}
 	if err := normalizeCodexRequestMetadataMap(payload, wsHeaders, account); err != nil {
 		return nil, fmt.Errorf("normalize websocket metadata: %w", err)
 	}
-	// normalizeCodexRequestMetadataMap 会按旧习惯把 session_id / x-codex-installation-id
-	// 重新写回头部（legacy compact 依赖它们，不能从源头删除），因此 WS 握手同样
-	// 必须在归一化之后重新执行终态线序收口，与 HTTP 路径同一规则。
-	if account.UsesOpenAICodexProtocol() {
-		projectCodexOutboundHeaders(wsHeaders, true)
-	}
+	s.finalizeOpenAIWSHandshake(account, wsHeaders, declaredTurnTrigger)
 
 	logOpenAIWSModeDebug(
 		"acquire_start account_id=%d account_type=%s transport=%s preferred_conn_id=%s has_previous_response_id=%v session_hash=%s has_turn_state=%v turn_state_len=%d has_turn_metadata=%v turn_metadata_len=%d store_disabled=%v store_disabled_conn_mode=%s retry_last_reason=%s force_new_conn=%v header_user_agent=%s header_openai_beta=%s header_originator=%s header_accept_language=%s header_session_id=%s header_conversation_id=%s session_id_source=%s conversation_id_source=%s has_prompt_cache_key=%v has_chatgpt_account_id=%v has_authorization=%v has_session_id=%v has_conversation_id=%v proxy_enabled=%v",

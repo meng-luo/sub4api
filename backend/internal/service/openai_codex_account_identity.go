@@ -13,7 +13,10 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-const codexAccountIdentityNamespaceVersion = "v1"
+// codexAccountIdentityNamespaceVersion 参与派生种子，改动即代表派生规则换代。
+// v2：种子由「字段名(kind)」改为「同义字段族(family)」，使 session_id / thread_id /
+// x-client-request-id / prompt_cache_key 收敛到同一个值（与官方客户端恒等关系一致）。
+const codexAccountIdentityNamespaceVersion = "v2"
 
 const codexAccountIdentitySourceContextKey = "openai_codex_account_identity_source"
 
@@ -112,21 +115,21 @@ func scopeCodexAccountIdentityValue(account *Account, apiKeyID int64, kind, raw 
 			return scopeCodexAccountIdentityValue(account, apiKeyID, "thread", thread) + ":" + ordinal
 		}
 	}
+	family, derivation := codexAccountIdentityFamily(kind)
 	seed := fmt.Sprintf(
-		"sub2api:codex-account-identity:%s:user:%d:account:%s:kind:%s:value:%s",
+		"sub2api:codex-account-identity:%s:user:%d:account:%s:family:%s:value:%s",
 		codexAccountIdentityNamespaceVersion,
 		apiKeyID,
 		namespace,
-		kind,
+		family,
 		raw,
 	)
-	// 官方 session_id / thread_id / turn_id 恒为 Uuid::now_v7()，installation_id
-	// 才是 Uuid::new_v4()。改写成账号级值时必须保持同一版本，否则出站头的
-	// 版本半字节（v4 vs v7）与官方客户端逐字节不一致；同时保留原值的 v7
-	// 时间戳，使「turn_id 时刻 ≈ turn_started_at」这类官方时间一致性在改写
-	// 后依然成立。原值不是 v7 时退回种子派生的稳定过去锚点。
-	switch kind {
-	case "session", "thread", "turn":
+	// 官方 session_id / thread_id / turn_id / context_window_id 恒为 Uuid::now_v7()，
+	// installation_id 才是 Uuid::new_v4()。改写成账号级值时必须保持同一版本，否则出站头
+	// 的版本半字节（v4 vs v7）与官方客户端不一致；同时保留原值的 v7 时间戳，使
+	// 「turn_id 时刻 ≈ turn_started_at」这类官方时间一致性在改写后依然成立。
+	// 原值不是 v7 时退回种子派生的稳定过去锚点。
+	if derivation == codexIdentityV7 {
 		anchorMs, ok := codexV7TimestampMs(raw)
 		if !ok {
 			anchorMs = deriveCodexStableTimestampMs(seed)
@@ -136,21 +139,68 @@ func scopeCodexAccountIdentityValue(account *Account, apiKeyID int64, kind, raw 
 	return deriveStableUUIDv4(seed)
 }
 
+// codexIdentityDerivation 是派生结果的版本形态：官方 installation_id 是 v4，
+// 其余会话/轮次标识都是 v7。
+type codexIdentityDerivation int
+
+const (
+	codexIdentityV4 codexIdentityDerivation = iota
+	codexIdentityV7
+)
+
+// codexAccountIdentityFamily 把同义字段归并到同一个派生族，并给出该族的 uuid 版本。
+//
+// 官方 Codex 客户端对同一份身份有多个出口，且它们在真机上**恒等**：
+// session_id == thread_id == x-client-request-id == window_id 前缀 == prompt_cache_key。
+// 派生种子若带上字段名（kind），同样的原值会派生出不同结果，直接破坏这条恒等式——
+// 出站后 session_id 与 thread_id 互不相等，而真实客户端永远相等。因此种子只按「族」
+// 区分，族内所有字段收敛到同一个值。
+//
+// 族之间必须保持不等的：installation（v4）、thread、turn、context-window。
+// 官方 turn_id 与 thread_id 不同，root_turn_id 与首 turn 的 turn_id 相同，故 turn
+// 族内 turn_id / root_turn_id / parent_turn_id 由同一份原值派生即自动保持恒等。
+func codexAccountIdentityFamily(kind string) (string, codexIdentityDerivation) {
+	switch kind {
+	case "session", "thread":
+		return "thread", codexIdentityV7
+	case "turn":
+		return "turn", codexIdentityV7
+	case "context-window":
+		return "context-window", codexIdentityV7
+	case "prompt-cache":
+		return "prompt-cache", codexIdentityV7
+	default:
+		return "installation", codexIdentityV4
+	}
+}
+
 var codexAccountIdentityFields = []struct {
 	name string
 	kind string
 }{
 	{name: "installation_id", kind: "installation"},
 	{name: "x-codex-installation-id", kind: "installation"},
+	// session / thread / x-client-request-id 在官方客户端上是同一个值（同一派生族）。
 	{name: "session_id", kind: "session"},
 	{name: "session-id", kind: "session"},
 	{name: "thread_id", kind: "thread"},
 	{name: "thread-id", kind: "thread"},
+	{name: "x-client-request-id", kind: "thread"},
+	{name: "parent_thread_id", kind: "thread"},
+	{name: "forked_from_thread_id", kind: "thread"},
+	// 子线程同时通过元数据 parent_thread_id 与握手头 x-codex-parent-thread-id 引用父线程
+	// （openai_ws_forwarder_payload.go 逐字转发该头）。只改一处会让同一请求携带两个
+	// 不同的父线程引用，必须与元数据同族、同原值、同派生值。
+	{name: codexParentThreadIDHeader, kind: "thread"},
+	// turn 族：官方新 turn 时 turn_id == root_turn_id，二者必须由同一份原值派生。
 	{name: "turn_id", kind: "turn"},
 	{name: "turn-id", kind: "turn"},
+	{name: "root_turn_id", kind: "turn"},
+	{name: "parent_turn_id", kind: "turn"},
+	// context_window_id 是与 thread 同族但独立的一条 v7。
+	{name: "context_window_id", kind: "context-window"},
 	{name: "window_id", kind: "window"},
 	{name: "x-codex-window-id", kind: "window"},
-	{name: "x-client-request-id", kind: "thread"},
 }
 
 func applyCodexAccountIdentityFields(values map[string]any, account *Account, apiKeyID int64) bool {

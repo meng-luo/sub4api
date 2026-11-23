@@ -977,68 +977,86 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthOriginatorCompatibility(t *testi
 func TestOpenAIGatewayService_Forward_WSv2_OAuthHonorsAccountUserAgent(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
-	c.Request.Header.Set("User-Agent", "luna/1.0.0")
+	for _, tc := range []struct {
+		name, headerMetadata, frameMetadata, wantTrigger, wantOriginator string
+	}{
+		{name: "gateway default", wantTrigger: "exec", wantOriginator: openai.CodexCLIOriginator},
+		{name: "explicit header", headerMetadata: `{"turn_trigger":"exec"}`, wantTrigger: "exec", wantOriginator: codexExecOriginator},
+		{name: "blank frame falls back to header", headerMetadata: `{"turn_trigger":"user"}`, frameMetadata: `{"turn_trigger":""}`, wantTrigger: "user", wantOriginator: openai.CodexCLIOriginator},
+		{name: "explicit frame", frameMetadata: `{"turn_trigger":"exec"}`, wantTrigger: "exec", wantOriginator: codexExecOriginator},
+		{name: "frame overrides header", headerMetadata: `{"turn_trigger":"exec"}`, frameMetadata: `{"turn_trigger":"user"}`, wantTrigger: "user", wantOriginator: openai.CodexCLIOriginator},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+			c.Request.Header.Set("User-Agent", "luna/1.0.0")
+			c.Request.Header.Set(openAIWSTurnMetadataHeader, tc.headerMetadata)
 
-	cfg := &config.Config{}
-	cfg.Security.URLAllowlist.Enabled = false
-	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
-	cfg.Gateway.OpenAIWS.Enabled = true
-	cfg.Gateway.OpenAIWS.OAuthEnabled = true
-	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
-	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
-	cfg.Gateway.OpenAIWS.AllowStoreRecovery = false
-	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
-	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
-	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+			cfg := &config.Config{}
+			cfg.Security.URLAllowlist.Enabled = false
+			cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+			cfg.Gateway.OpenAIWS.Enabled = true
+			cfg.Gateway.OpenAIWS.OAuthEnabled = true
+			cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+			cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+			cfg.Gateway.OpenAIWS.AllowStoreRecovery = false
+			cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+			cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+			cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
 
-	captureConn := &openAIWSCaptureConn{
-		events: [][]byte{
-			[]byte(`{"type":"response.completed","response":{"id":"resp_oauth_account_ua","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`),
-		},
+			captureConn := &openAIWSCaptureConn{
+				events: [][]byte{
+					[]byte(`{"type":"response.completed","response":{"id":"resp_oauth_account_ua","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`),
+				},
+			}
+			captureDialer := &openAIWSCaptureDialer{conn: captureConn}
+			pool := newOpenAIWSConnPool(cfg)
+			defer pool.Close()
+			pool.setClientDialerForTest(captureDialer)
+
+			svc := &OpenAIGatewayService{
+				cfg:              cfg,
+				httpUpstream:     &httpUpstreamRecorder{},
+				cache:            &stubGatewayCache{},
+				openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+				toolCorrector:    NewCodexToolCorrector(),
+				openaiWSPool:     pool,
+			}
+			account := &Account{
+				ID:          130,
+				Name:        "openai-oauth-custom-ua",
+				Platform:    PlatformOpenAI,
+				Type:        AccountTypeOAuth,
+				Status:      StatusActive,
+				Schedulable: true,
+				Concurrency: 1,
+				Credentials: map[string]any{
+					"access_token": "oauth-token-1",
+					// 填写于某个历史版本的账号级 UA：指纹要保留，版本段不能被逐字沿用。
+					"user_agent": "codex-tui/0.125.0 (Mac OS X 15.1.0; arm64) iTerm.app",
+				},
+				Extra: map[string]any{
+					"responses_websockets_v2_enabled": true,
+				},
+			}
+
+			body := []byte(`{"model":"gpt-5.1","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)
+			if tc.frameMetadata != "" {
+				body = []byte(`{"model":"gpt-5.1","stream":false,"input":[{"type":"input_text","text":"hello"}],"client_metadata":{"x-codex-turn-metadata":` + strconv.Quote(tc.frameMetadata) + `}}`)
+			}
+			result, err := svc.Forward(context.Background(), c, account, body)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Equal(t, tc.wantTrigger, gjson.Get(captureDialer.lastHeaders.Get(openAIWSTurnMetadataHeader), "turn_trigger").String())
+			require.Equal(t, tc.wantOriginator, captureDialer.lastHeaders.Get("originator"))
+			require.Equal(t,
+				tc.wantOriginator+"/"+codexCLIVersion+" (Mac OS X 15.1.0; arm64) iTerm.app ("+tc.wantOriginator+"; "+codexCLIVersion+")",
+				captureDialer.lastHeaders.Get("user-agent"),
+			)
+			require.Empty(t, captureDialer.lastHeaders.Get("version"))
+		})
 	}
-	captureDialer := &openAIWSCaptureDialer{conn: captureConn}
-	pool := newOpenAIWSConnPool(cfg)
-	pool.setClientDialerForTest(captureDialer)
-
-	svc := &OpenAIGatewayService{
-		cfg:              cfg,
-		httpUpstream:     &httpUpstreamRecorder{},
-		cache:            &stubGatewayCache{},
-		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:    NewCodexToolCorrector(),
-		openaiWSPool:     pool,
-	}
-	account := &Account{
-		ID:          130,
-		Name:        "openai-oauth-custom-ua",
-		Platform:    PlatformOpenAI,
-		Type:        AccountTypeOAuth,
-		Status:      StatusActive,
-		Schedulable: true,
-		Concurrency: 1,
-		Credentials: map[string]any{
-			"access_token": "oauth-token-1",
-			// 填写于某个历史版本的账号级 UA：指纹要保留，版本段不能被逐字沿用。
-			"user_agent": "codex-tui/0.125.0 (Mac OS X 15.1.0; arm64) iTerm.app",
-		},
-		Extra: map[string]any{
-			"responses_websockets_v2_enabled": true,
-		},
-	}
-
-	body := []byte(`{"model":"gpt-5.1","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)
-	result, err := svc.Forward(context.Background(), c, account, body)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.Equal(t, openai.CodexCLIOriginator, captureDialer.lastHeaders.Get("originator"))
-	require.Equal(t,
-		"codex_cli_rs/"+codexCLIVersion+" (Mac OS X 15.1.0; arm64) iTerm.app",
-		captureDialer.lastHeaders.Get("user-agent"),
-	)
-	require.Empty(t, captureDialer.lastHeaders.Get("version"))
 }
 
 func TestOpenAIGatewayService_Forward_WSv2_HeaderSessionFallbackFromPromptCacheKey(t *testing.T) {

@@ -224,6 +224,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		requestedReasoningEffort *string
 	}
 	ingressSessionOriginalModel := ""
+	followUpTurnTrigger := ""
 
 	applyPayloadMutation := func(current []byte, path string, value any) ([]byte, error) {
 		next, err := sjson.SetBytes(current, path, value)
@@ -360,7 +361,17 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket identity metadata", fingerprintErr)
 			}
 			stageCodexFingerprintIDs(c, ids)
-			metadataBody, _, metadataErr := normalizeCodexRequestMetadata(fingerprintBody, nil, account, false)
+			var metadataFallback http.Header
+			if turn == 1 && !forceHTTPBridge {
+				// Carry just the header's trigger into the first frame's defaults.
+				// The remaining handshake metadata is merged after account scoping.
+				if trigger := codexTurnTriggerFromMetadata(c.GetHeader(openAIWSTurnMetadataHeader)); trigger != "" {
+					fallback, _ := json.Marshal(map[string]string{"turn_trigger": trigger})
+					metadataFallback = make(http.Header)
+					metadataFallback.Set(openAIWSTurnMetadataHeader, string(fallback))
+				}
+			}
+			metadataBody, _, metadataErr := normalizeCodexRequestMetadataWithTurnTriggerFallback(fingerprintBody, metadataFallback, account, false, followUpTurnTrigger)
 			if metadataErr != nil {
 				return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket identity metadata", metadataErr)
 			}
@@ -832,6 +843,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 
 	firstRoutingFields := gjson.GetManyBytes(firstPayload.payloadRaw, "model", "service_tier")
+	turnMetadata := strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader))
 	wsHeaders, _, ticket, buildHdrErr := s.buildOpenAIWSHeadersWithTicket(
 		ctx,
 		c,
@@ -840,7 +852,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		wsDecision,
 		isCodexCLI,
 		turnState,
-		strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader)),
+		turnMetadata,
 		firstPayload.promptCacheKey,
 		firstRoutingFields[0].String(),
 		firstRoutingFields[1].String(),
@@ -848,15 +860,32 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	if buildHdrErr != nil {
 		return fmt.Errorf("build ws headers: %w", buildHdrErr)
 	}
+	declaredTurnTrigger := ""
+	if account.UsesOpenAICodexProtocol() {
+		declaredTurnTrigger = codexClientDeclaredTurnTrigger(wsHeaders, firstPayload.rawForHash)
+	}
 	if metadataBody, metadataChanged, metadataErr := normalizeCodexRequestMetadata(firstPayload.payloadRaw, wsHeaders, account, false); metadataErr != nil {
 		return fmt.Errorf("normalize websocket handshake metadata: %w", metadataErr)
 	} else if metadataChanged {
 		firstPayload.payloadRaw = metadataBody
 		firstPayload.payloadBytes = len(metadataBody)
 	}
-	// 归一化按旧习惯重写 session_id / x-codex-installation-id 头，握手前重新收口。
-	if account.UsesOpenAICodexProtocol() {
-		projectCodexOutboundHeaders(wsHeaders, true)
+	s.finalizeOpenAIWSHandshake(account, wsHeaders, declaredTurnTrigger)
+	if declaredTurnTrigger != "" {
+		// Keep the first frame's trigger when rebuilding headers for a reconnect.
+		// Copy just the trigger so derived IDs can still follow the new cache key.
+		trigger := codexTurnTriggerFromMetadata(wsHeaders.Get(openAIWSTurnMetadataHeader))
+		followUpTurnTrigger = trigger
+		if trigger != codexTurnTriggerFromMetadata(turnMetadata) {
+			if !gjson.Valid(turnMetadata) || !gjson.Parse(turnMetadata).IsObject() {
+				turnMetadata = "{}"
+			}
+			var err error
+			turnMetadata, err = sjson.Set(turnMetadata, "turn_trigger", trigger)
+			if err != nil {
+				return fmt.Errorf("preserve websocket handshake trigger: %w", err)
+			}
+		}
 	}
 	baseAcquireReq := openAIWSAcquireRequest{
 		Account:          account,
@@ -2075,7 +2104,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				wsDecision,
 				isCodexCLI,
 				turnState,
-				strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader)),
+				turnMetadata,
 				nextPayload.promptCacheKey,
 				nextRoutingFields[0].String(),
 				nextRoutingFields[1].String(),
@@ -2083,6 +2112,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if updHdrErr != nil {
 				logOpenAIWSModeInfo("ingress_ws_update_headers_failed account_id=%d err=%v", account.ID, updHdrErr)
 			} else {
+				s.finalizeOpenAIWSHandshake(account, updatedHeaders, declaredTurnTrigger)
 				baseAcquireReq.Headers = updatedHeaders
 				baseAcquireReq.ObserveHandshake = s.codexTicketHandshakeObserver(ctx, updatedTicket)
 			}

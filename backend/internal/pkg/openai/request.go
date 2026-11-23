@@ -275,8 +275,12 @@ const CodexDefaultOriginator = CodexCLIOriginator
 // server_is_overloaded，而相同请求改用 codex_cli_rs 可以成功。归一化必须同时改写
 // originator 和 User-Agent 首段，避免触发 #3901 的身份配对校验。
 //
-// 版本、操作系统、架构和终端指纹保持不变；尾部 `(name; version)` 客户端标识组
-// 属于 TUI 身份时移除，因为真实 CLI UA 不携带该组。
+// 版本、操作系统、架构和终端指纹保持不变。
+//
+// 尾部 `(name; version)` 客户端标识组**必须保留并改名**，不能删除：实测官方
+// 非交互客户端 UA 为 `codex_exec/0.171.0 (Mac OS 27.2.0; arm64) dumb
+// (codex_exec; 0.171.0)`，交互式 TUI 同理携带该组。只有「前缀 → 尾部」两处
+// 同步改名，才能同时满足 #3901 的配对校验与真实线序。
 func NormalizeCodexClientIdentityToCLI(originator, userAgent string) (string, string, bool) {
 	if !strings.EqualFold(strings.TrimSpace(originator), CodexTUIOriginator) {
 		return originator, userAgent, false
@@ -289,12 +293,85 @@ func NormalizeCodexClientIdentityToCLI(originator, userAgent string) (string, st
 	}
 
 	rest := ua[slash:]
+	normalized := CodexCLIOriginator + rest
 	if trailer := codexUATrailerName(ua); trailer != "" && IsCodexOfficialClientOriginator(trailer) {
-		if open := strings.LastIndex(rest, "("); open > 0 {
-			rest = strings.TrimRight(rest[:open], " ")
-		}
+		normalized = rewriteCodexUATrailerName(normalized, CodexCLIOriginator)
 	}
-	return CodexCLIOriginator, CodexCLIOriginator + rest, true
+	return CodexCLIOriginator, normalized, true
+}
+
+// rewriteCodexUATrailerName 把尾部官方客户端标识组 `(name; version)` 的 name 改成 name，
+// 版本段原样保留。括号组缺少 `;` 分隔的版本、或原 name 不是官方 originator 时原样返回。
+func rewriteCodexUATrailerName(ua, name string) string {
+	open := strings.LastIndex(ua, "(")
+	if open < 0 {
+		return ua
+	}
+	closeIdx := strings.Index(ua[open+1:], ")")
+	if closeIdx < 0 {
+		return ua
+	}
+	inner := ua[open+1 : open+1+closeIdx]
+	semi := strings.Index(inner, ";")
+	if semi < 0 {
+		return ua
+	}
+	oldName := strings.TrimSpace(inner[:semi])
+	if oldName == "" || !IsCodexOfficialClientOriginator(oldName) {
+		return ua
+	}
+	version := strings.TrimSpace(inner[semi+1:])
+	if version == "" {
+		return ua
+	}
+	return ua[:open+1] + name + "; " + version + ua[open+1+closeIdx:]
+}
+
+// WithCodexUATrailer 保证 Codex 形态 User-Agent 带与首段一致的尾部客户端标识组
+// `(name; version)`，这是 codex-rs 写入 clientInfo 的位置，真实客户端恒发。
+//
+//   - 尾部已是官方标识组：name 与 version 一并刷新为入参；
+//   - 尾部缺失：追加 ` (name; version)`；
+//   - UA 不是 `{client}/{version}` 形态：原样返回，由调用方回退。
+//
+// name 必须与 UA 首段一致，否则会造出首段与尾部互相矛盾的身份。
+func WithCodexUATrailer(userAgent, name, version string) string {
+	ua := strings.TrimSpace(userAgent)
+	name = strings.TrimSpace(name)
+	version = strings.TrimSpace(version)
+	if ua == "" || name == "" || version == "" || !isSaneCodexOriginator(name) {
+		return ua
+	}
+	slash := strings.IndexByte(ua, '/')
+	if slash <= 0 {
+		return ua
+	}
+	if trailing := codexUATrailerName(ua); trailing != "" && IsCodexOfficialClientOriginator(trailing) {
+		return rewriteCodexUATrailerVersion(rewriteCodexUATrailerName(ua, name), version)
+	}
+	return ua + " (" + name + "; " + version + ")"
+}
+
+// SwapCodexUserAgentClient 把 Codex 形态 UA 的客户端名同时替换到首段与尾部标识组，
+// 版本、OS/架构与终端段原样保留。用于让 originator 与 UA 首段保持配对（#3901）。
+//
+// name 必须是官方 originator、且 UA 是 `{client}/{version}...` 形态，否则返回空串，
+// 由调用方决定回退。
+func SwapCodexUserAgentClient(userAgent, name string) string {
+	ua := strings.TrimSpace(userAgent)
+	name = strings.TrimSpace(name)
+	if ua == "" || !isSaneCodexOriginator(name) || !IsCodexOfficialClientOriginator(name) {
+		return ""
+	}
+	slash := strings.IndexByte(ua, '/')
+	if slash <= 0 || strings.TrimSpace(ua[slash+1:]) == "" {
+		return ""
+	}
+	swapped := name + ua[slash:]
+	if trailer := codexUATrailerName(ua); trailer != "" && IsCodexOfficialClientOriginator(trailer) {
+		swapped = rewriteCodexUATrailerName(swapped, name)
+	}
+	return swapped
 }
 
 // CodexUserAgentVersion 提取 Codex UA 的完整版本段，即 `{client}/{version} (...` 中的 version。

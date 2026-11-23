@@ -33,13 +33,17 @@ const (
 	openaiPlatformAPIURL            = "https://api.openai.com/v1/responses"
 	openaiPlatformAPIInputTokensURL = "https://api.openai.com/v1/responses/input_tokens"
 	openaiStickySessionTTL          = 5 * time.Minute // 粘性会话TTL
-	// Local Codex baseline observed on this Windows host:
-	// Windows 10.0.22621.1848 / AMD64 / TERM=dumb.
-	// Keep explicit administrator UA settings authoritative; this is the built-in fallback.
-	codexCLIUserAgentSuffix = " (Windows 10.0.22621.1848; x86_64) dumb"
-	// codexCLIUserAgent is the compile-time fallback UA; runtime settings can still
-	// provide a complete client fingerprint and the current version is rebuilt below.
-	codexCLIUserAgent = openai.CodexDefaultOriginator + "/" + codexCLIVersion + codexCLIUserAgentSuffix
+	// codexCLIUserAgentPlatform 是内置兜底 UA 的「OS; 架构 + 终端」段。
+	//
+	// 真实 codex-rs 的 UA 形如 `{client}/{version} ({os}; {arch}) {terminal}
+	// ({client}; {version})`。本段只负责中间的平台/终端部分，尾部的
+	// `({client}; {version})` 组由 WithCodexUATrailer 按最终 originator 与版本生成，
+	// 不允许在这里手写——否则改版本号时会拼出首尾版本不一致的身份。
+	//
+	// 该值是兜底常量，不是采集结论：管理员的 openai_codex_user_agent 设置或
+	// 账号级 User-Agent 仍然权威。部署方应按自己真实的客户端分布调整本段，
+	// 让整个账号池不要共用同一个平台指纹。
+	codexCLIUserAgentPlatform = " (Windows 10.0.26100.4946; x86_64) dumb"
 	// codex_cli_only 拒绝时单个请求头日志长度上限（字符）
 	codexCLIOnlyHeaderValueMaxBytes = 256
 
@@ -64,6 +68,11 @@ const (
 	// 陈旧时放行一次请求，从而通过正常响应头自愈，而无需等待整个窗口（5h/7d）重置。
 	openAICodexAutoPauseStaleAfter = 2 * time.Hour
 )
+
+// codexCLIUserAgent 是编译期兜底规范 User-Agent。真实 codex-rs 的 UA 恒带尾部
+// `(client; version)` 客户端标识组，这里由 buildCodexCLIUserAgent 统一拼装，确保
+// 首段、版本段与尾部组三者同源。
+var codexCLIUserAgent = buildCodexCLIUserAgent(codexCLIVersion)
 
 // OpenAI allowed headers whitelist (for non-passthrough).
 var openaiAllowedHeaders = map[string]bool{
