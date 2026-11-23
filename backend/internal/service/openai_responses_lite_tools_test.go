@@ -5,6 +5,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -695,4 +696,133 @@ func TestNormalizeOpenAIResponsesLiteTools_DeduplicatesExistingNamelessTools(t *
 	require.Len(t, gjson.GetBytes(updated, "input.0.tools").Array(), 2)
 	require.Equal(t, gjson.GetBytes(body, "input").Raw, gjson.GetBytes(updated, "input").Raw)
 	require.False(t, gjson.GetBytes(updated, "tools").Exists())
+}
+
+func countRootJSONKey(body []byte, key string) int {
+	n := 0
+	gjson.ParseBytes(body).ForEach(func(k, _ gjson.Result) bool {
+		if k.Str == key {
+			n++
+		}
+		return true
+	})
+	return n
+}
+
+func TestNormalizeOpenAIResponsesLiteToolsPayload_DuplicateReasoningKeyRewritesLastValueInPlace(t *testing.T) {
+	body := []byte(`{"input":[],"parallel_tool_calls":false,"reasoning":{"context":"x","effort":"low"},"metadata":{},"reasoning":{"context":"y","effort":"high"}}`)
+	updated, changed, err := normalizeOpenAIResponsesLiteToolsPayload(body)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.True(t, json.Valid(updated), "输出必须是合法 JSON")
+
+	require.Equal(t, 1, countRootJSONKey(updated, "reasoning"),
+		"重复的 reasoning 键必须收敛为一份")
+	require.Equal(t, "all_turns", gjson.GetBytes(updated, "reasoning.context").String(),
+		"改写必须以末值语义为准并真正落到唯一一份上")
+	require.Equal(t, "high", gjson.GetBytes(updated, "reasoning.effort").String())
+	require.Less(t, strings.Index(string(updated), `"reasoning"`),
+		strings.Index(string(updated), `"metadata"`), "保留首个键的位置")
+}
+
+func TestNormalizeOpenAIResponsesLiteToolsPayload_DuplicateRewrittenFields(t *testing.T) {
+	body := []byte(`{"\u0069nput":"old input","instructions":"old instructions","parallel_tool_calls":false,"metadata":{ "sequence": 900719925474099312345 },"input":"current input","instructions":"current instructions","parallel_tool_calls":true}`)
+	updated, changed, err := normalizeOpenAIResponsesLiteToolsPayload(body)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.True(t, json.Valid(updated))
+	for _, field := range []string{"input", "instructions", "parallel_tool_calls"} {
+		require.Equal(t, 1, countRootJSONKey(updated, field), field)
+	}
+	require.Equal(t, "additional_tools", gjson.GetBytes(updated, "input.0.type").String())
+	require.Equal(t, "current instructions", gjson.GetBytes(updated, "input.1.content.0.text").String())
+	require.Equal(t, "current input", gjson.GetBytes(updated, "input.2.content.0.text").String())
+	require.Equal(t, `""`, gjson.GetBytes(updated, "instructions").Raw)
+	require.Equal(t, "false", gjson.GetBytes(updated, "parallel_tool_calls").Raw)
+	require.Equal(t, gjson.GetBytes(body, "metadata").Raw, gjson.GetBytes(updated, "metadata").Raw)
+
+	repeated, changed, err := normalizeOpenAIResponsesLiteToolsPayload(updated)
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.Equal(t, updated, repeated)
+}
+
+func TestNormalizeOpenAIResponsesLitePayloadForAccount_DuplicateParallelToolCallsAPIKey(t *testing.T) {
+	body := []byte(`{"parallel_tool_calls":false,"tools":[{"type":"function","name":"lookup"}],"parallel_tool_calls":true}`)
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+	updated, changed, err := normalizeOpenAIResponsesLitePayloadForAccount(body, account)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.True(t, json.Valid(updated))
+	require.Equal(t, 1, countRootJSONKey(updated, "parallel_tool_calls"))
+	require.Equal(t, "false", gjson.GetBytes(updated, "parallel_tool_calls").Raw)
+	require.Equal(t, gjson.GetBytes(body, "tools").Raw, gjson.GetBytes(updated, "tools").Raw)
+}
+
+func TestNormalizeOpenAIResponsesLiteToolsPayload_ToolsNullKeepsNormalisationPath(t *testing.T) {
+	body := []byte(`{"tools":null,"input":[{"type":"message","role":"user","content":[]}],"parallel_tool_calls":false,"reasoning":{"context":"all_turns"}}`)
+	updated, changed, err := normalizeOpenAIResponsesLiteToolsPayload(body)
+	require.NoError(t, err, "tools:null 必须走原规范化路径而不是被快速路径拒绝")
+	require.True(t, changed)
+	require.False(t, gjson.GetBytes(updated, "tools").Exists(), "顶层 tools 应被移除")
+}
+
+func TestNormalizeOpenAIResponsesLiteToolsPayload_InstructionsNullKeepsNormalisationPath(t *testing.T) {
+	body := []byte(`{"instructions":null,"input":[{"type":"message","role":"user","content":[]}],"parallel_tool_calls":false,"reasoning":{"context":"all_turns"}}`)
+	_, _, err := normalizeOpenAIResponsesLiteToolsPayload(body)
+	require.NoError(t, err, "instructions:null 必须走原规范化路径而不是被快速路径拒绝")
+}
+
+func TestNormalizeOpenAIResponsesLiteToolsPayload_EscapedImageDetailIsStillStripped(t *testing.T) {
+	body := []byte(`{"input":[{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,AA==","det\u0061il":"original"}]}],"parallel_tool_calls":false,"reasoning":{"context":"all_turns"}}`)
+	updated, changed, err := normalizeOpenAIResponsesLiteToolsPayload(body)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.False(t, gjson.GetBytes(updated, "input.0.content.0.detail").Exists(),
+		"转义写法的 detail 也必须被剥离")
+}
+
+func TestNormalizeOpenAIResponsesLiteToolsPayload_DuplicateReasoningContextUsesLastValue(t *testing.T) {
+	body := []byte(`{"input":[],"parallel_tool_calls":false,"reasoning":{"context":"all_turns","context":"other"}}`)
+	updated, changed, err := normalizeOpenAIResponsesLiteToolsPayload(body)
+	require.NoError(t, err)
+	require.True(t, changed, "解码后 context=other，必须被改写为 all_turns")
+	require.Equal(t, "all_turns", gjson.GetBytes(updated, "reasoning.context").String())
+}
+
+func TestNormalizeOpenAIResponsesLiteToolsPayload_FoldsTools(t *testing.T) {
+	const lastTools = `[{"type":"function","name":"shell","parameters":{"type":"object"}}]`
+	const metadata = `{ "tools": ["keep"], "id": 900719925474099312345 }`
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"escaped key", `{"\u0074ools":` + lastTools + `,"metadata":` + metadata + `,"input":[],"parallel_tool_calls":false,"reasoning":{"context":"all_turns"}}`},
+		{"null followed by array", `{"tools":null,"tools":` + lastTools + `,"metadata":` + metadata + `,"input":[],"parallel_tool_calls":false,"reasoning":{"context":"all_turns"}}`},
+		{"adjacent", `{"tools":{},"tools":` + lastTools + `,"metadata":` + metadata + `,"input":[]}`},
+		{"interleaved and escaped", ` { "\u0074ools":{} , "metadata":` + metadata + ` , "tools":null , "input":[] , "tool\u0073":` + lastTools + ` } `},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			updated, changed, err := normalizeOpenAIResponsesLiteToolsPayload([]byte(tc.body))
+			require.NoError(t, err)
+			require.True(t, changed)
+			require.True(t, gjson.ValidBytes(updated))
+			require.False(t, gjson.GetBytes(updated, "tools").Exists())
+			require.Len(t, gjson.GetBytes(updated, "input").Array(), 1)
+			require.Equal(t, "additional_tools", gjson.GetBytes(updated, "input.0.type").String())
+			require.Equal(t, "shell", gjson.GetBytes(updated, "input.0.tools.0.tools.0.name").String())
+			require.Equal(t, metadata, gjson.GetBytes(updated, "metadata").Raw)
+
+			repeated, changed, err := normalizeOpenAIResponsesLiteToolsPayload(updated)
+			require.NoError(t, err)
+			require.False(t, changed)
+			require.Equal(t, updated, repeated)
+		})
+	}
+}
+
+func TestNormalizeOpenAIResponsesLiteToolsPayload_NonArrayToolsStillRejected(t *testing.T) {
+	body := []byte(`{"tools":"not-an-array","input":[],"parallel_tool_calls":false,"reasoning":{"context":"all_turns"}}`)
+	_, _, err := normalizeOpenAIResponsesLiteToolsPayload(body)
+	require.ErrorContains(t, err, "responses Lite requires tools to be an array")
 }

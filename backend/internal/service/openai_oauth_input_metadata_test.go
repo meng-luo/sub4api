@@ -182,3 +182,11 @@ func TestOAuthInputInternalMetadataCompatibility(t *testing.T) {
 	require.True(t, ok)
 	require.NotContains(t, input[0], "internal_chat_message_metadata_passthrough")
 }
+
+func TestNormalizeOpenAIOAuthResponsesCompatibilityBody_StripsEscapedInputMetadata(t *testing.T) {
+	body := []byte(`{"input":[{"type":"message","role":"user","content":[],"internal_chat_message_metadata_passthroug\u0068":{"k":"v"}}],"model":"gpt-5.6-luna"}`)
+	updated, changed, err := normalizeOpenAIOAuthResponsesCompatibilityBody(body)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.JSONEq(t, `[{"type":"message","role":"user","content":[]}]`, gjson.GetBytes(updated, "input").Raw)
+}

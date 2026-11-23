@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -17,23 +16,23 @@ func TestAPIKeyCacheSubscriber_BlocksUntilContextCancellation(t *testing.T) {
 	defer func() { _ = client.Close() }()
 	cache := NewAPIKeyCache(client)
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	received := make(chan string, 1)
 	returned := make(chan error, 1)
 	go func() {
 		returned <- cache.SubscribeAuthCacheInvalidation(ctx, func(value string) { received <- value })
 	}()
 
-	var value string
 	require.Eventually(t, func() bool {
-		require.NoError(t, client.Publish(context.Background(), authCacheInvalidateChannel, "hash").Err())
-		select {
-		case value = <-received:
-			return true
-		default:
-			return false
-		}
+		return server.PubSubNumSub(authCacheInvalidateChannel)[authCacheInvalidateChannel] == 1
 	}, time.Second, 10*time.Millisecond)
-	require.Equal(t, "hash", value)
+	require.NoError(t, client.Publish(ctx, authCacheInvalidateChannel, "hash").Err())
+	select {
+	case value := <-received:
+		require.Equal(t, "hash", value)
+	case <-time.After(time.Second):
+		t.Fatal("subscriber did not receive invalidation")
+	}
 	select {
 	case err := <-returned:
 		t.Fatalf("subscriber returned while connection was active: %v", err)
@@ -42,7 +41,7 @@ func TestAPIKeyCacheSubscriber_BlocksUntilContextCancellation(t *testing.T) {
 	cancel()
 	select {
 	case err := <-returned:
-		require.True(t, errors.Is(err, context.Canceled))
+		require.ErrorIs(t, err, context.Canceled)
 	case <-time.After(time.Second):
 		t.Fatal("subscriber did not stop after context cancellation")
 	}

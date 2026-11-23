@@ -297,4 +297,12 @@ func TestAnalyzeToolCallOutputContextCoverageBytes(t *testing.T) {
 			require.Equal(t, tt.coversAllIDs, coverage.ContextCoversAllCallIDs, "ContextCoversAllCallIDs")
 		})
 	}
+
+	t.Run("escaped tool output type", func(t *testing.T) {
+		for _, itemType := range []string{`function_call_output`, `function_call_outpu\u0074`} {
+			body := []byte(`{"input":[{"type":"` + itemType + `","call_id":"c1","output":"ok"}]}`)
+			coverage := AnalyzeToolCallOutputContextCoverageBytes(body)
+			require.True(t, coverage.HasFunctionCallOutput, itemType)
+		}
+	})
 }

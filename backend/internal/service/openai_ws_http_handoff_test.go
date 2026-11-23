@@ -50,6 +50,13 @@ func TestOpenAIWSHTTPHandoffHistoryPreservesContext(t *testing.T) {
 		require.NoError(t, err)
 		require.False(t, safe)
 	})
+	t.Run("previous response without history remains WS", func(t *testing.T) {
+		for _, key := range []string{`previous_response_id`, `previous_response_\u0069d`} {
+			_, safe, err := newOpenAIWSHTTPHandoffHistory(nil).prepare([]byte(`{"` + key + `":"resp_1","input":[]}`))
+			require.NoError(t, err, key)
+			require.False(t, safe, key)
+		}
+	})
 	t.Run("root history is not duplicated", func(t *testing.T) {
 		root := []byte(`{"type":"response.create","input":[{"role":"user","content":"full history"}]}`)
 		prepared, safe, err := history.prepare(root)
@@ -89,6 +96,7 @@ func TestOpenAIWSHTTPHandoffHistoryPreservesContext(t *testing.T) {
 		for _, payload := range []string{
 			`{"type":"response.create","generate":false,"input":"prewarm"}`,
 			`{"type":"response.create","input":[{"type":"item_reference","id":"msg_remote"}]}`,
+			`{"type":"response.create","input":[{"type":"item_referenc\u0065","id":"msg_remote"}]}`,
 		} {
 			_, safe, err := history.prepare([]byte(payload))
 			require.NoError(t, err)
